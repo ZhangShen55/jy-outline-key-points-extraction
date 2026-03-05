@@ -1,0 +1,29 @@
+[project]
+name = "教学大纲四要点核心内容提取系统"
+version = "1.0.0"
+debug = true
+
+[llm]
+model = "doubao-seed-2-0-pro-260215"
+api_key = "3c815b38-9dc4-4e6e-b40a-7c0cd5d4512b"
+base_url = "https://ark.cn-beijing.volces.com/api/v3"
+#https://ark.cn-beijing.volces.com/api/v3/chat/completions
+
+#model = "qwen3-8b"
+#api_key = "vllm"
+#base_url = "http://10.80.5.25:8001/v1"
+
+parsermodel = "/root/workspace/教学PPT知识点提取工程/Dolphin"
+max_tokens = 8192
+#max_tokens = 4096
+temperature = 0
+#https://ark.cn-beijing.volces.com/api/v3/chat/completions
+[chunking]
+chunk_size = 10000 # Number of words per chunk
+overlap = 1000  # Number of words to overlap between chunks
+batch_size = 100  # Number of words to overlap between chunks
+
+[logging]
+level = "INFO"  # 日志级别: DEBUG, INFO, WARNING, ERROR, CRITICAL
+format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+file = ""  # 日志文件路径，为空则只输出到控制台

@@ -1,0 +1,90 @@
+"""
+配置管理模块
+整合自 knowledge_graph/config_loader.py
+"""
+import tomllib
+from pathlib import Path
+from pydantic_settings import BaseSettings
+from functools import lru_cache
+
+
+def load_toml_config() -> dict:
+    """加载 config.toml 配置文件"""
+    config_path = Path("config.toml")
+    if config_path.exists():
+        with open(config_path, "rb") as f:
+            return tomllib.load(f)
+    return {}
+
+
+_toml = load_toml_config()
+
+
+class Settings(BaseSettings):
+    """应用配置"""
+
+    # 项目信息
+    PROJECT_NAME: str = "教学大纲四要点核心内容提取系统"
+    VERSION: str = "1.0.0"
+    DEBUG: bool = _toml.get("project", {}).get("debug", False)
+
+    # LLM 配置
+    LLM_MODEL: str = _toml.get("llm", {}).get("model", "doubao-seed-2-0-pro-260215")
+    LLM_API_KEY: str = _toml.get("llm", {}).get("api_key", "")
+    LLM_BASE_URL: str = _toml.get("llm", {}).get("base_url", "")
+    LLM_MAX_TOKENS: int = _toml.get("llm", {}).get("max_tokens", 8192)
+    LLM_TEMPERATURE: float = _toml.get("llm", {}).get("temperature", 0.0)
+
+    # Dolphin 模型路径（文档解析）
+    PARSER_MODEL_PATH: str = _toml.get("llm", {}).get("parsermodel", "")
+
+    # 分块配置
+    CHUNK_SIZE: int = _toml.get("chunking", {}).get("chunk_size", 10000)
+    CHUNK_OVERLAP: int = _toml.get("chunking", {}).get("overlap", 1000)
+    BATCH_SIZE: int = _toml.get("chunking", {}).get("batch_size", 100)
+
+    # 日志配置
+    LOG_LEVEL: str = _toml.get("logging", {}).get("level", "INFO")
+    LOG_FILE: str = _toml.get("logging", {}).get("file", "app.log")
+    LOG_FORMAT: str = _toml.get("logging", {}).get("format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+    # GPU 配置
+    CUDA_VISIBLE_DEVICES: str = "1"
+
+    class Config:
+        env_file = ".env"
+        extra = "ignore"
+
+
+@lru_cache()
+def get_settings() -> Settings:
+    """获取配置单例"""
+    return Settings()
+
+
+# 便捷函数（兼容旧代码）
+def get_llm_config() -> dict:
+    """获取 LLM 配置"""
+    settings = get_settings()
+    return {
+        "model": settings.LLM_MODEL,
+        "api_key": settings.LLM_API_KEY,
+        "base_url": settings.LLM_BASE_URL,
+        "max_tokens": settings.LLM_MAX_TOKENS,
+        "temperature": settings.LLM_TEMPERATURE,
+    }
+
+
+def get_parser_model_path() -> str:
+    """获取 Dolphin 模型路径"""
+    return get_settings().PARSER_MODEL_PATH
+
+
+def get_chunking_config() -> dict:
+    """获取分块配置"""
+    settings = get_settings()
+    return {
+        "chunk_size": settings.CHUNK_SIZE,
+        "overlap": settings.CHUNK_OVERLAP,
+        "batch_size": settings.BATCH_SIZE,
+    }
