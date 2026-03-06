@@ -77,12 +77,16 @@ def test_document():
     print("=" * 60)
 
     # 查找测试文件
-    test_data_dir = Path(__file__).parent / "data" / "syllabus"
-    test_files = list(test_data_dir.glob("*.pdf"))
-
+    test_data_dir = Path(__file__).parent / "data" / "test2"
+    # test_files = list(test_data_dir.glob("*.pdf"))
+    extensions = ["*.docx", "*.doc", "*.pptx", "*.ppt", "*.pdf"] # 支持多种格式，Aspose 会自动识别和处理
+    test_files = []
+    for ext in extensions:
+        test_files.extend(test_data_dir.glob(ext))
+    
     if not test_files:
         print("\n⚠️  未找到测试文件")
-        print(f"   请将测试 PDF 文件放到: {test_data_dir}")
+        print(f"   请将测试文件放到: {test_data_dir}")
         return False
 
     test_file = test_files[0]
