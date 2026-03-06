@@ -19,7 +19,6 @@ dependencies = [
     "scikit-learn>=1.7.0",
     "jieba>=0.42.0",
     "tomli>=2.2.0",
-    "volcengine-python-sdk[ark]",
     "aspose-words>=26.2.0",
 ]
 

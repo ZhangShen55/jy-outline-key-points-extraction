@@ -90,7 +90,7 @@ annotated-doc==0.0.3
 annotated-types==0.7.0
 
 # volcengine sdk
-volcengine-python-sdk[ark]
+# volcengine-python-sdk[ark]
 # volcengine-python-sdk==5.0.13
 
 # ============================================
