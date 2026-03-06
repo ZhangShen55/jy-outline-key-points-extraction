@@ -39,6 +39,11 @@ jiter==0.11.0
 # 文档处理
 # ============================================
 
+
+aspose-words>=26.2.0 # docx, doc->pdf
+# aspose-slides>=26.2.0 # pptx -> pdf 需要图形渲染相关的依赖
+# aspose-cells>=26.2.0 # xlsx -> pdf 需要图形渲染相关的依赖
+
 # PDF 处理
 PyMuPDF==1.26.4
 
@@ -83,6 +88,10 @@ hf-xet==1.1.9
 modelscope==1.30.0
 annotated-doc==0.0.3
 annotated-types==0.7.0
+
+# volcengine sdk
+volcengine-python-sdk[ark]
+# volcengine-python-sdk==5.0.13
 
 # ============================================
 # 数据处理和科学计算
