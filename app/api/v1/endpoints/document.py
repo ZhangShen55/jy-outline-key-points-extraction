@@ -56,6 +56,74 @@ async def process_document_background(task_id: str, tmp_path: Path, orig_name: s
         if tmp_path and tmp_path.exists():
             tmp_path.unlink()
 
+async def process_document_background2(task_id: str, tmp_path: Path, orig_name: str):
+    """后台处理文档的异步函数（使用LLM Pipeline）"""
+    try:
+        # 更新任务状态为处理中
+        tasks[task_id]["status"] = "processing"
+        tasks[task_id]["message"] = "文档处理中（LLM Pipeline）..."
+        tasks[task_id]["started_at"] = datetime.now().isoformat()
+
+        logger.info(f"🔄 开始处理任务 {task_id} (LLM Pipeline)")
+
+        # 调用LLM Pipeline处理文档
+        from app.services.llm_pipeline import run_llm_pipeline
+        result = await run_llm_pipeline(tmp_path, orig_name)
+        result["id"] = task_id
+
+        # 更新任务状态为完成
+        tasks[task_id]["status"] = "completed"
+        tasks[task_id]["result"] = result
+        tasks[task_id]["message"] = "处理完成（LLM Pipeline）"
+        tasks[task_id]["completed_at"] = datetime.now().isoformat()
+
+        logger.info(f"✅ 任务 {task_id} 处理完成 (LLM Pipeline)")
+
+    except Exception as e:
+        logger.error(f"❌ 任务 {task_id} 处理失败: {e}")
+        tasks[task_id]["status"] = "failed"
+        tasks[task_id]["error"] = str(e)
+        tasks[task_id]["message"] = f"处理失败: {e}"
+        tasks[task_id]["failed_at"] = datetime.now().isoformat()
+
+    finally:
+        # 清理临时文件
+        if tmp_path and tmp_path.exists():
+            tmp_path.unlink()
+    """后台处理文档的异步函数（使用LLM Pipeline）"""
+    try:
+        # 更新任务状态为处理中
+        tasks[task_id]["status"] = "processing"
+        tasks[task_id]["message"] = "文档处理中（LLM Pipeline）..."
+        tasks[task_id]["started_at"] = datetime.now().isoformat()
+
+        logger.info(f"🔄 开始处理任务 {task_id} (LLM Pipeline)")
+
+        # 调用LLM Pipeline处理文档
+        from app.services.llm_pipeline import run_llm_pipeline
+        result = await run_llm_pipeline(tmp_path, orig_name)
+        result["id"] = task_id
+
+        # 更新任务状态为完成
+        tasks[task_id]["status"] = "completed"
+        tasks[task_id]["result"] = result
+        tasks[task_id]["message"] = "处理完成（LLM Pipeline）"
+        tasks[task_id]["completed_at"] = datetime.now().isoformat()
+
+        logger.info(f"✅ 任务 {task_id} 处理完成 (LLM Pipeline)")
+
+    except Exception as e:
+        logger.error(f"❌ 任务 {task_id} 处理失败: {e}")
+        tasks[task_id]["status"] = "failed"
+        tasks[task_id]["error"] = str(e)
+        tasks[task_id]["message"] = f"处理失败: {e}"
+        tasks[task_id]["failed_at"] = datetime.now().isoformat()
+
+    finally:
+        # 清理临时文件
+        if tmp_path and tmp_path.exists():
+            tmp_path.unlink()
+
 
 @router.post("/process", response_model=TaskResponse, status_code=202)
 async def process_document(request: ProcessRequest, background_tasks: BackgroundTasks):
@@ -92,7 +160,7 @@ async def process_document(request: ProcessRequest, background_tasks: Background
         }
 
         # 添加到后台任务
-        background_tasks.add_task(process_document_background, task_id, tmp_path, orig_name)
+        background_tasks.add_task(process_document_background2, task_id, tmp_path, orig_name)
 
         logger.info(f"📝 任务 {task_id} 已提交，文件: {request.filename}")
 
