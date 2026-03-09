@@ -224,40 +224,39 @@ class FastAPIClient:
         #   status_response["result"]["result"] = 实际结果（含 keywords/process_time_ms）
         #   status_response["result"]["usage"] = token 统计
         pipeline_obj = status_response.get("result", {})
-        result_data = pipeline_obj.get("result", {})
+        keywords = pipeline_obj.get("result", [])
         usage = pipeline_obj.get("usage", {})
 
         print(f"\n📈 统计信息:")
-        print(f"   - 处理耗时: {result_data.get('process_time_ms', 0)}ms")
         print(f"   - Token使用: {usage.get('total_tokens', 0)}")
         print(f"     • 输入: {usage.get('prompt_tokens', 0)}")
         print(f"     • 输出: {usage.get('completion_tokens', 0)}")
 
         # 章节信息
-        keywords = result_data.get("keywords", [])
         print(f"\n📚 章节信息:")
         print(f"   - 章节数量: {len(keywords)}")
 
         for i, chapter in enumerate(keywords, 1):
             chapter_name = chapter.get("chapter", "未知章节")
-            content = chapter.get("content", {})
+            content_list = chapter.get("content", [])
+            # content 是 [{"basic": [...]}, {"keypoints": [...]}, ...] 格式
+            content = {}
+            for module in content_list:
+                content.update(module)
             print(f"\n   {i}. {chapter_name}")
 
-            # 统计各模块
             modules = {
                 "basic": "基本要求",
-                "key_points": "教学重点",
-                "difficult_points": "教学难点",
+                "keypoints": "教学重点",
+                "difficulty": "教学难点",
                 "politics": "课程思政"
             }
 
             for module_key, module_name in modules.items():
                 if module_key in content:
-                    module_data = content[module_key]
-                    # 检查是否有 lexicon
-                    has_lexicon = "lexicon" in module_data
-                    lexicon_count = len(module_data.get("lexicon", [])) if has_lexicon else 0
-                    print(f"      ✓ {module_name} (词库: {lexicon_count}个)")
+                    items = content[module_key]
+                    lexicon_count = sum(len(item.get("lexicon", [])) for item in items if isinstance(item, dict))
+                    print(f"      ✓ {module_name} ({len(items)}个知识点, 词库共{lexicon_count}个)")
                 else:
                     print(f"      ✗ {module_name} (缺失)")
 
