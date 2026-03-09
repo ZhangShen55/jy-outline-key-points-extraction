@@ -1,6 +1,5 @@
 """
 配置管理模块
-整合自 knowledge_graph/config_loader.py
 """
 import tomllib
 from pathlib import Path
@@ -35,7 +34,7 @@ class Settings(BaseSettings):
     LLM_MAX_TOKENS: int = _toml.get("llm", {}).get("max_tokens", 8192)
     LLM_TEMPERATURE: float = _toml.get("llm", {}).get("temperature", 0.0)
 
-    # Dolphin 模型路径（文档解析）
+    # Dolphin 模型路径
     PARSER_MODEL_PATH: str = _toml.get("llm", {}).get("parsermodel", "")
 
     # 分块配置
@@ -58,13 +57,12 @@ class Settings(BaseSettings):
 
 @lru_cache()
 def get_settings() -> Settings:
-    """获取配置单例"""
+    """返回配置单例"""
     return Settings()
 
 
-# 便捷函数（兼容旧代码）
 def get_llm_config() -> dict:
-    """获取 LLM 配置"""
+    """返回 LLM 配置字典"""
     settings = get_settings()
     return {
         "model": settings.LLM_MODEL,
@@ -76,12 +74,12 @@ def get_llm_config() -> dict:
 
 
 def get_parser_model_path() -> str:
-    """获取 Dolphin 模型路径"""
+    """返回 Dolphin 模型路径"""
     return get_settings().PARSER_MODEL_PATH
 
 
 def get_chunking_config() -> dict:
-    """获取分块配置"""
+    """返回分块配置字典"""
     settings = get_settings()
     return {
         "chunk_size": settings.CHUNK_SIZE,
