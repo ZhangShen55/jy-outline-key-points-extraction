@@ -57,12 +57,12 @@ def test_basic():
 
     # 4. 测试服务器连接
     print("\n4️⃣ 测试服务器连接...")
-    client = FastAPIClient(server_url="http://localhost:8000")
+    client = FastAPIClient(server_url="http://localhost:5000")
     if client.check_health():
         print(f"   ✅ 服务器连接成功")
     else:
         print(f"   ⚠️  服务器未运行（这是正常的，如果你还没启动服务器）")
-        print(f"      启动命令: uvicorn app.main:app --reload --port 8000")
+        print(f"      启动命令: uvicorn app.main:app --reload --port 5000")
 
     print("\n" + "=" * 60)
     print("✅ 基础测试完成！")
@@ -77,7 +77,7 @@ def test_document():
     print("=" * 60)
 
     # 查找测试文件
-    test_data_dir = Path(__file__).parent / "data" / "test2"
+    test_data_dir = Path(__file__).parent / "data" / "test"
     # test_files = list(test_data_dir.glob("*.pdf"))
     extensions = ["*.docx", "*.doc", "*.pptx", "*.ppt", "*.pdf"] # 支持多种格式，Aspose 会自动识别和处理
     test_files = []
@@ -93,13 +93,13 @@ def test_document():
     print(f"\n测试文件: {test_file.name}")
 
     # 创建客户端
-    client = FastAPIClient(server_url="http://localhost:8000")
+    client = FastAPIClient(server_url="http://localhost:5000")
 
     # 检查服务器
     print("\n检查服务器状态...")
     if not client.check_health():
         print("\n❌ 服务器未运行，请先启动服务器:")
-        print("   uvicorn app.main:app --reload --port 8000")
+        print("   uvicorn app.main:app --reload --port 5000")
         return False
 
     # 处理文档
