@@ -55,7 +55,7 @@ class HealthResponse(BaseModel):
     tasks_count: int = Field(0, description="任务数量")
 
 
-# 快捷构造函数
+# 快捷响应构造
 def success(data: Any = None, message: str = "success") -> dict:
     """成功响应"""
     return {"code": 200, "message": message, "data": data}

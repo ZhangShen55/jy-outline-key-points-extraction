@@ -25,7 +25,7 @@ def setup_logging():
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # 文件输出：10MB 轮转，保留 5 个备份
+    # 文件输出：单文件 10MB，保留 5 个轮转备份
     if settings.LOG_FILE:
         file_handler = RotatingFileHandler(
             settings.LOG_FILE,
@@ -43,5 +43,5 @@ def get_logger(name: str) -> logging.Logger:
 
 
 def config_logger_from_toml(config_path: str = "config.toml"):
-    """从 TOML 配置初始化日志（兼容旧接口）"""
+    """从 TOML 配置初始化日志（兼容旧调用入口）"""
     setup_logging()
