@@ -74,7 +74,7 @@ app/tests/
 python app/tests/test_client.py --health
 
 # 启动服务器
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 5000
 ```
 
 **问题：ModuleNotFoundError**

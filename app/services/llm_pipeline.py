@@ -224,6 +224,7 @@ class LLMPipeline:
         # 组装响应结构
         final_result = {
             # 'model': self.model  # 不对外暴露模型
+            'course': course_name,
             'result': keywords,
             'usage': {
                 'prompt_tokens': total_prompt_tokens,
