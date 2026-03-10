@@ -118,5 +118,5 @@ async def run_pipeline(pdf_path: Path, orig_name: str = None) -> dict:
 
 
 if __name__ == "__main__":
-    # 测试用
+    # 本地调试入口
     asyncio.run(run_pipeline(Path("test.pdf")))

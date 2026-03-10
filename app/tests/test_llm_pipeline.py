@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-# 添加项目根目录到路径
+# 注入项目根目录到 Python 搜索路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from app.services.llm_pipeline import run_llm_pipeline
@@ -34,13 +34,13 @@ async def main():
     print()
     
     try:
-        # 运行LLM Pipeline
+        # 执行 LLM 管道
         result = await run_llm_pipeline(file_path, orig_name=file_path.stem)
         
         print("✅ 处理完成!")
         print()
         
-        # 打印结果摘要
+        # 输出摘要信息
         print("=" * 60)
         print("📊 处理结果摘要")
         print("=" * 60)
@@ -61,7 +61,7 @@ async def main():
             content_count = len(chapter.get('content', []))
             print(f"   - {chapter_name} ({content_count} 个模块)")
         
-        # 保存到文件
+        # 写入结果文件
         if args.output:
             output_path = Path(args.output)
             with open(output_path, 'w', encoding='utf-8') as f:

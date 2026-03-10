@@ -1,11 +1,11 @@
 """
-LLM直接提取Pipeline（替代Dolphin方案）
+LLM 文档提取管道
 
-流程：
-1. LLM提取Markdown（Prompt 1）
-2. 内存中切分（按# ##切分）
-3. 多路并发处理各章节（Prompt 2）
-4. 合并结果
+处理流程：
+1. 从 PDF Base64 提取 Markdown 结构
+2. 按标题切分课程与章节
+3. 并发提取章节结构化 JSON
+4. 合并并去重词库
 """
 
 import asyncio
@@ -27,7 +27,7 @@ logger = get_logger(__name__)
 # ============ 核心类实现 ============
 
 class LLMPipeline:
-    """LLM直接提取Pipeline"""
+    """LLM 文档提取管道。"""
     
     def __init__(self):
         settings = get_settings()
@@ -50,23 +50,17 @@ class LLMPipeline:
         """
         total_start = time.time()
 
-        # Step 1: LLM提取Markdown
-        logger.info("[Step 1] LLM提取Markdown...")
+        logger.info("[1/4] 提取文档 Markdown 结构...")
         markdown_content = await self._extract_markdown(filedata, orig_name)
-        # print(f"提取到的Markdown内容: {markdown_content}")
         
-        # Step 2: 内存中切分
-        logger.info("[Step 2] 切分章节...")
+        logger.info("[2/4] 解析 Markdown 章节结构...")
         course_name, chapters = self._parse_markdown_structure(markdown_content)
-        # print(f"课程名: {course_name}, 共 {len(chapters)} 个章节")
-        logger.info(f"课程名: {course_name}, 共 {len(chapters)} 个章节")
+        logger.info(f"识别到课程: {course_name}，章节数: {len(chapters)}")
         
-        # Step 3: 多路并发处理各章节
-        logger.info("[Step 3] 并发处理各章节...")
+        logger.info("[3/4] 并发提取章节要点...")
         chapter_results = await self._process_chapters_concurrently(course_name, chapters)
         
-        # Step 4: 合并结果
-        logger.info("[Step 4] 合并结果...")
+        logger.info("[4/4] 汇总章节结果...")
         final_result = self._merge_results(course_name, chapter_results, total_start)
         
         total_time = time.time() - total_start
@@ -75,7 +69,7 @@ class LLMPipeline:
         return final_result
     
     async def _extract_markdown(self, filedata: str, orig_name: str = None) -> str:
-        """Step 1: LLM提取Markdown"""
+        """提取文档 Markdown 结构。"""
         filename = (orig_name or "document") + ".pdf"
 
         response = await self.client.responses.create(
@@ -102,7 +96,7 @@ class LLMPipeline:
         return response.output[1].content[0].text
 
     def _parse_markdown_structure(self, markdown_content: str) -> tuple:
-        """Step 2: 内存中切分Markdown结构"""
+        """按 Markdown 标题切分课程与章节。"""
         lines = markdown_content.strip().split('\n')
         
         course_name = None
@@ -131,14 +125,14 @@ class LLMPipeline:
             elif current_chapter and (line.startswith('#') or line):
                 current_chapter['content'].append(line)
         
-        # 添加最后一个章节
+        # 写入最后一个章节
         if current_chapter:
             chapters.append(current_chapter)
         
         return course_name, chapters
     
     async def _process_chapters_concurrently(self, course_name: str, chapters: List[dict]) -> List[dict]:
-        """Step 3: 多路并发处理各章节"""
+        """并发提取各章节的结构化内容。"""
         tasks = [
             self._process_single_chapter(course_name, chapter)
             for chapter in chapters
@@ -146,7 +140,7 @@ class LLMPipeline:
         
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # 处理可能的异常
+        # 收集处理成功的章节结果
         successful_results = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
@@ -161,13 +155,13 @@ class LLMPipeline:
         chapter_title = chapter['title']
         chapter_content = '\n'.join(chapter['content'])
         
-        # 构建Prompt
+        # 构建章节提取提示词
         prompt = JSON_EXTRACTION_PROMPT_TEMPLATE.format(课程名=course_name)
         
-        # 构建输入内容
+        # 组装章节输入内容
         input_content = f"## {chapter_title}\n{chapter_content}"
         
-        # 调用LLM
+        # 调用 LLM 提取章节结构化结果
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=[
@@ -190,46 +184,46 @@ class LLMPipeline:
         }
     
     def _merge_results(self, course_name: str, chapter_results: List[dict], start_time: float) -> dict:
-        """Step 4: 合并所有章节结果，并去除重复的lexicon元素"""
+        """合并章节结果并进行全局词库去重。"""
         total_prompt_tokens = 0
         total_completion_tokens = 0
         
         keywords = []
         
-        # 用于全局去重的lexicon集合
+        # 记录全局唯一词库词条
         seen_lexicons = set()
         
         for result in chapter_results:
             chapter_data = result['result']
             usage = result['usage']
             
-            # 统计token使用量
+            # 累计 token 使用量
             total_prompt_tokens += usage['prompt_tokens']
             total_completion_tokens += usage['completion_tokens']
             
-            # 对章节内的lexicon进行去重处理
+            # 按章节内模块执行词库去重
             if 'content' in chapter_data:
                 for module in chapter_data['content']:
                     for module_name, items in module.items():
                         if isinstance(items, list):
                             for item in items:
                                 if 'lexicon' in item and isinstance(item['lexicon'], list):
-                                    # 去重：保留未出现过的lexicon
+                                    # 保留首次出现的词条
                                     unique_lexicons = []
                                     for lex in item['lexicon']:
                                         if lex not in seen_lexicons:
                                             seen_lexicons.add(lex)
                                             unique_lexicons.append(lex)
-                                    # 随机打乱顺序（实现随机保留的效果）
+                                    # 打乱顺序以避免固定词条排列
                                     import random
                                     random.shuffle(unique_lexicons)
                                     item['lexicon'] = unique_lexicons
             
             keywords.append(chapter_data)
         
-        # 构建最终响应
+        # 组装响应结构
         final_result = {
-            #'model': self.model, # 不对外暴露模型
+            # 'model': self.model  # 不对外暴露模型
             'result': keywords,
             'usage': {
                 'prompt_tokens': total_prompt_tokens,
@@ -241,7 +235,7 @@ class LLMPipeline:
         return final_result
 
 
-# ============ 便捷函数 ============
+# ============ 便捷调用入口 ============
 
 async def run_llm_pipeline(filedata: str, orig_name: str = None) -> dict:
     """

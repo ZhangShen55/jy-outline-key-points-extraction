@@ -1,7 +1,7 @@
 """
 任务管理端点
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from typing import Dict
 
 from app.schemas.response import TaskListResponse
@@ -11,7 +11,7 @@ from app.core.exceptions import NotFoundException
 logger = get_logger(__name__)
 router = APIRouter()
 
-# 导入任务存储（与 document.py 共享）
+# 共享文档任务状态存储
 from app.api.v1.endpoints.document import tasks
 
 

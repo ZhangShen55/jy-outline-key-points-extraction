@@ -18,7 +18,7 @@ class FastAPIClient:
 
     def __init__(self, server_url: str = "http://localhost:8000"):
         self.server_url = server_url.rstrip('/')
-        # 结果保存到 app/tests/results/
+        # 结果目录: app/tests/results/
         self.results_dir = Path(__file__).parent / "results"
         self.results_dir.mkdir(exist_ok=True)
 
@@ -36,12 +36,12 @@ class FastAPIClient:
         print(f"📄 提交文档: {file_path}")
         print(f"{'='*60}")
 
-        # 检查文件是否存在
+        # 文件存在性校验
         if not Path(file_path).exists():
             print(f"❌ 文件不存在: {file_path}")
             return None
 
-        # 读取文件并转换为 Base64
+        # 读取文件并编码为 Base64
         try:
             with open(file_path, "rb") as f:
                 file_data = base64.b64encode(f.read()).decode()
@@ -51,7 +51,7 @@ class FastAPIClient:
             print(f"❌ 文件读取失败: {e}")
             return None
 
-        # 提交任务（注意：新的 API 路径是 /api/v1/document/process）
+        # 提交任务（API 路径: /api/v1/document/process）
         try:
             print(f"📤 正在提交任务到服务器...")
             response = requests.post(
@@ -145,14 +145,14 @@ class FastAPIClient:
         while True:
             elapsed = time.time() - start_time
 
-            # 检查是否超时
+            # 超时检查
             if elapsed > max_wait_time:
                 print(f"\n❌ 等待超时（{max_wait_time}秒），任务可能仍在处理中")
                 print(f"   可以稍后使用以下命令查询:")
                 print(f"   python app/tests/test_client.py --status {task_id}")
                 return None
 
-            # 查询状态
+            # 轮询状态
             poll_count += 1
             status_data = self.get_task_status(task_id)
 
@@ -163,17 +163,17 @@ class FastAPIClient:
             status = status_data.get("status")
             message = status_data.get("message", "")
 
-            # 打印进度
+            # 输出当前进度
             print(f"[{elapsed:.1f}s] 第 {poll_count} 次查询 - 状态: {status} - {message}")
 
-            # 任务完成
+            # 完成态
             if status == "completed":
                 print(f"\n{'='*60}")
                 print(f"✅ 任务完成！总耗时: {elapsed:.1f}秒")
                 print(f"{'='*60}")
                 return status_data
 
-            # 任务失败
+            # 失败态
             elif status == "failed":
                 error = status_data.get("error", "Unknown error")
                 print(f"\n{'='*60}")
@@ -181,7 +181,7 @@ class FastAPIClient:
                 print(f"{'='*60}")
                 return None
 
-            # 继续等待
+            # 继续轮询
             elif status in ["pending", "processing"]:
                 time.sleep(poll_interval)
                 continue
@@ -220,8 +220,8 @@ class FastAPIClient:
         print(f"{'='*60}")
 
         # /status/{task_id} 返回结构：
-        #   status_response["result"] = pipeline 返回的对象（含 model/id/result/usage）
-        #   status_response["result"]["result"] = 实际结果（含 keywords/process_time_ms）
+        #   status_response["result"] = pipeline 返回对象（含 id/result/usage）
+        #   status_response["result"]["result"] = 章节结果数组
         #   status_response["result"]["usage"] = token 统计
         pipeline_obj = status_response.get("result", {})
         keywords = pipeline_obj.get("result", [])
@@ -232,14 +232,14 @@ class FastAPIClient:
         print(f"     • 输入: {usage.get('prompt_tokens', 0)}")
         print(f"     • 输出: {usage.get('completion_tokens', 0)}")
 
-        # 章节信息
+        # 章节统计
         print(f"\n📚 章节信息:")
         print(f"   - 章节数量: {len(keywords)}")
 
         for i, chapter in enumerate(keywords, 1):
             chapter_name = chapter.get("chapter", "未知章节")
             content_list = chapter.get("content", [])
-            # content 是 [{"basic": [...]}, {"keypoints": [...]}, ...] 格式
+            # content 结构: [{"basic": [...]}, {"keypoints": [...]}, ...]
             content = {}
             for module in content_list:
                 content.update(module)
@@ -279,21 +279,21 @@ class FastAPIClient:
         Returns:
             是否处理成功
         """
-        # 1. 提交任务
+        # 提交任务
         task_id = self.submit_task(file_path)
         if not task_id:
             return False
 
-        # 2. 等待完成
+        # 等待完成
         result = self.wait_for_completion(task_id, poll_interval, max_wait_time)
         if not result:
             return False
 
-        # 3. 保存结果
+        # 保存结果
         if not self.save_result(task_id, result):
             return False
 
-        # 4. 打印摘要
+        # 打印摘要
         self.print_result_summary(result)
 
         return True
@@ -321,7 +321,7 @@ class FastAPIClient:
         print(f"消息: {status_data.get('message', '')}")
 
         if status == "completed":
-            # 保存结果
+            # 写入本地结果文件
             self.save_result(task_id, status_data)
             self.print_result_summary(status_data)
             return True
@@ -360,7 +360,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  # 处理文档
+  # 文档处理
   python app/tests/test_client.py app/tests/data/海洋学院-SR113026-海洋油气地质学.pdf
 
   # 指定服务器地址
@@ -369,7 +369,7 @@ def main():
   # 查询已存在的任务
   python app/tests/test_client.py --status chatcmpl-xxxxx
 
-  # 检查服务器健康状态
+  # 服务器健康检查
   python app/tests/test_client.py --health
         """
     )
@@ -410,7 +410,7 @@ def main():
 
     args = parser.parse_args()
 
-    # 创建客户端
+    # 初始化客户端
     client = FastAPIClient(server_url=args.server)
 
     # 健康检查
@@ -426,7 +426,7 @@ def main():
         success = client.query_task(args.status)
         exit(0 if success else 1)
 
-    # 处理文档
+    # 文档处理入口
     if args.file:
         # 先检查服务器
         print(f"\n{'='*60}")
@@ -437,7 +437,7 @@ def main():
             print(f"  uvicorn app.main:app --reload --port 8000")
             exit(1)
 
-        # 处理文档
+        # 执行文档处理
         success = client.process_document(
             args.file,
             poll_interval=args.interval,

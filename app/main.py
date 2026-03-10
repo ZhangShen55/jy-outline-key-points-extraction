@@ -26,7 +26,7 @@ async def lifespan(app: FastAPI):
     logger.info("👋 应用关闭中...")
 
 
-# 创建 FastAPI 应用
+# 应用实例
 settings = get_settings()
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -35,7 +35,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS 中间件
+# 挂载 CORS 中间件
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 生产环境应收紧
@@ -96,4 +96,4 @@ if __name__ == "__main__":
     )
 
 
-# uvicorn app.main:app --reload --port 8000
+# 运行命令示例: uvicorn app.main:app --reload --port 8000

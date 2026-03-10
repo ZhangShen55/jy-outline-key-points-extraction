@@ -6,7 +6,7 @@
 import sys
 from pathlib import Path
 
-# 添加项目根目录到 Python 路径
+# 注入项目根目录到 Python 搜索路径
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
@@ -19,7 +19,7 @@ def test_basic():
     print("🧪 FastAPI 项目结构测试")
     print("=" * 60)
 
-    # 1. 测试配置加载
+    # 配置加载测试
     print("\n1️⃣ 测试配置加载...")
     try:
         from app.core.config import get_settings
@@ -32,7 +32,7 @@ def test_basic():
         print(f"   ❌ 配置加载失败: {e}")
         return False
 
-    # 2. 测试日志系统
+    # 日志系统测试
     print("\n2️⃣ 测试日志系统...")
     try:
         from app.core.logging_config import setup_logging, get_logger
@@ -44,7 +44,7 @@ def test_basic():
         print(f"   ❌ 日志系统失败: {e}")
         return False
 
-    # 3. 测试 FastAPI 应用
+    # FastAPI 应用构建测试
     print("\n3️⃣ 测试 FastAPI 应用...")
     try:
         from app.main import app
@@ -55,7 +55,7 @@ def test_basic():
         print(f"   ❌ FastAPI 应用失败: {e}")
         return False
 
-    # 4. 测试服务器连接
+    # 服务器连接测试
     print("\n4️⃣ 测试服务器连接...")
     client = FastAPIClient(server_url="http://localhost:5000")
     if client.check_health():
@@ -76,10 +76,10 @@ def test_document():
     print("📄 文档处理测试")
     print("=" * 60)
 
-    # 查找测试文件
+    # 读取可用测试文件
     test_data_dir = Path(__file__).parent / "data" / "test"
     # test_files = list(test_data_dir.glob("*.pdf"))
-    extensions = ["*.docx", "*.doc", "*.pptx", "*.ppt", "*.pdf"] # 支持多种格式，Aspose 会自动识别和处理
+    extensions = ["*.docx", "*.doc", "*.pptx", "*.ppt", "*.pdf"]  # 支持多格式文档
     test_files = []
     for ext in extensions:
         test_files.extend(test_data_dir.glob(ext))
@@ -92,17 +92,17 @@ def test_document():
     test_file = test_files[0]
     print(f"\n测试文件: {test_file.name}")
 
-    # 创建客户端
+    # 初始化客户端
     client = FastAPIClient(server_url="http://localhost:5000")
 
-    # 检查服务器
+    # 服务器状态检查
     print("\n检查服务器状态...")
     if not client.check_health():
         print("\n❌ 服务器未运行，请先启动服务器:")
         print("   uvicorn app.main:app --reload --port 5000")
         return False
 
-    # 处理文档
+    # 文档处理测试
     print(f"\n开始处理文档...")
     success = client.process_document(
         str(test_file),
@@ -131,12 +131,12 @@ def main():
 
     args = parser.parse_args()
 
-    # 基础测试
+    # 基础能力测试
     if not test_basic():
         print("\n❌ 基础测试失败")
         sys.exit(1)
 
-    # 完整测试
+    # 完整流程测试
     if args.full:
         if not test_document():
             print("\n❌ 文档处理测试失败")
