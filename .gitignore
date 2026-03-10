@@ -10,8 +10,9 @@ build/
 
 
 # 环境与密钥
-!.env
-!.env.*
+.env
+.env.*
+!.env.example
 .venv/
 venv/
 env/
