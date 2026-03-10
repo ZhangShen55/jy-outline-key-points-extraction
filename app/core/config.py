@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = _toml.get("chunking", {}).get("overlap", 1000)
     BATCH_SIZE: int = _toml.get("chunking", {}).get("batch_size", 100)
 
+    # 并发控制
+    MAX_CONCURRENT: int = _toml.get("concurrency", {}).get("max_concurrent", 10)
+    MAX_QUEUE: int = _toml.get("concurrency", {}).get("max_queue", 10)
+
     # 日志配置
     LOG_LEVEL: str = _toml.get("logging", {}).get("level", "INFO")
     LOG_FILE: str = _toml.get("logging", {}).get("file", "app.log")

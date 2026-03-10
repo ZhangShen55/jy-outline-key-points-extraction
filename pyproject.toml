@@ -20,6 +20,7 @@ dependencies = [
     "jieba>=0.42.0",
     "tomli>=2.2.0",
     "aspose-words>=26.2.0",
+    "aiohttp"
 ]
 
 [project.optional-dependencies]

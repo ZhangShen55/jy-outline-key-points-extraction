@@ -3,6 +3,7 @@
 """
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pathlib import Path
+import asyncio
 import tempfile
 import uuid
 import base64
@@ -12,14 +13,20 @@ from typing import Dict, Optional
 
 from app.schemas.request import ProcessRequest
 from app.schemas.response import TaskResponse, TaskStatusResponse
+from app.core.config import get_settings
 from app.core.logging_config import get_logger
 from app.core.exceptions import NotFoundException
 
 logger = get_logger(__name__)
 router = APIRouter()
 
-# 任务存储（生产环境应使用 Redis 或数据库）
+# 任务存储（单实例内存，多实例部署需替换为 Redis）
 tasks: Dict[str, dict] = {}
+
+# 并发控制
+_settings = get_settings()
+_semaphore = asyncio.Semaphore(_settings.MAX_CONCURRENT)
+_queue_count = 0  # 排队等待数，不含处理中
 
 # 文件魔数 -> 格式映射
 _MAGIC_BYTES = {
@@ -53,7 +60,7 @@ def prepare_pdf_base64(filedata: str, filename: str) -> str:
     if file_type == 'pdf':
         return filedata
 
-    # doc / docx：需要转换
+    # doc/docx 转换为 PDF
     tmp_dir = Path(tempfile.mkdtemp())
     suffix = '.docx' if file_type == 'docx' else '.doc'
     tmp_doc = tmp_dir / f"input{suffix}"
@@ -69,32 +76,57 @@ def prepare_pdf_base64(filedata: str, filename: str) -> str:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-async def process_document_background(task_id: str, filedata: str, orig_name: str):
+async def process_document_background(task_id: str, tmp_file: str, orig_name: str):
     """后台处理文档的异步函数（LLM Pipeline）"""
+    global _queue_count
+    settings = get_settings()
+
+    # 队列已满，拒绝任务
+    if _queue_count >= settings.MAX_QUEUE:
+        tasks[task_id]["status"] = "failed"
+        tasks[task_id]["error"] = "服务繁忙，队列已满，请稍后重试"
+        tasks[task_id]["message"] = "队列已满"
+        tasks[task_id]["failed_at"] = datetime.now().isoformat()
+        logger.warning(f"⚠️ 任务 {task_id} 被拒绝：队列已满 ({_queue_count}/{settings.MAX_QUEUE})")
+        return
+
+    _queue_count += 1
+    tasks[task_id]["status"] = "queued"
+    tasks[task_id]["message"] = f"排队等待中，当前队列位置: {_queue_count}"
+    logger.info(f"📋 任务 {task_id} 进入队列，当前排队数: {_queue_count}")
+
     try:
-        tasks[task_id]["status"] = "processing"
-        tasks[task_id]["message"] = "文档处理中..."
-        tasks[task_id]["started_at"] = datetime.now().isoformat()
+        async with _semaphore:
+            _queue_count -= 1
+            tasks[task_id]["status"] = "processing"
+            tasks[task_id]["message"] = "文档处理中..."
+            tasks[task_id]["started_at"] = datetime.now().isoformat()
+            logger.info(f"🔄 开始处理任务 {task_id}")
 
-        logger.info(f"🔄 开始处理任务 {task_id}")
+            filedata = Path(tmp_file).read_text(encoding="utf-8")
 
-        from app.services.llm_pipeline import run_llm_pipeline
-        result = await run_llm_pipeline(filedata, orig_name)
-        result["id"] = task_id
+            from app.services.llm_pipeline import run_llm_pipeline
+            result = await run_llm_pipeline(filedata, orig_name)
+            result["id"] = task_id
 
-        tasks[task_id]["status"] = "completed"
-        tasks[task_id]["result"] = result
-        tasks[task_id]["message"] = "处理完成"
-        tasks[task_id]["completed_at"] = datetime.now().isoformat()
-
-        logger.info(f"✅ 任务 {task_id} 处理完成")
+            tasks[task_id]["status"] = "completed"
+            tasks[task_id]["result"] = result
+            tasks[task_id]["message"] = "处理完成"
+            tasks[task_id]["completed_at"] = datetime.now().isoformat()
+            logger.info(f"✅ 任务 {task_id} 处理完成")
 
     except Exception as e:
+        _queue_count = max(0, _queue_count - 1)
         logger.error(f"❌ 任务 {task_id} 处理失败: {e}")
         tasks[task_id]["status"] = "failed"
         tasks[task_id]["error"] = str(e)
         tasks[task_id]["message"] = f"处理失败: {e}"
         tasks[task_id]["failed_at"] = datetime.now().isoformat()
+    finally:
+        try:
+            Path(tmp_file).unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 @router.post("/process", response_model=TaskResponse, status_code=202)
@@ -105,12 +137,18 @@ async def process_document(request: ProcessRequest, background_tasks: Background
     立即返回任务ID，不等待处理完成。
     使用 GET /document/status/{task_id} 查询处理进度。
     """
+    settings = get_settings()
     try:
         task_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
         orig_name = Path(request.filename).stem
 
-        # 检测文件类型，doc/docx 转为 PDF base64
         pdf_filedata = prepare_pdf_base64(request.filedata, request.filename)
+
+        # base64 落盘，减少排队期间内存占用
+        tmp_fd, tmp_file = tempfile.mkstemp(suffix=".b64", prefix=f"task_{task_id}_")
+        import os
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            f.write(pdf_filedata)
 
         tasks[task_id] = {
             "task_id": task_id,
@@ -122,9 +160,9 @@ async def process_document(request: ProcessRequest, background_tasks: Background
             "created_at": datetime.now().isoformat()
         }
 
-        background_tasks.add_task(process_document_background, task_id, pdf_filedata, orig_name)
+        background_tasks.add_task(process_document_background, task_id, tmp_file, orig_name)
 
-        logger.info(f"📝 任务 {task_id} 已提交，文件: {request.filename}")
+        logger.info(f"📝 任务 {task_id} 已提交，文件: {request.filename}，并发上限: {settings.MAX_CONCURRENT}，队列上限: {settings.MAX_QUEUE}")
 
         return TaskResponse(
             task_id=task_id,
