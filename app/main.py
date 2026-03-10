@@ -83,9 +83,9 @@ if __name__ == "__main__":
     import uvicorn
 
     logger.info(f"🚀 启动 {settings.PROJECT_NAME}")
-    logger.info(f"📍 服务地址: http://0.0.0.0:8000")
-    logger.info(f"📝 API文档: http://0.0.0.0:8000/docs")
-    logger.info(f"📖 ReDoc文档: http://0.0.0.0:8000/redoc")
+    logger.info(f"📍 服务地址: http://0.0.0.0:5000")
+    logger.info(f"📝 API文档: http://0.0.0.0:5000/docs")
+    logger.info(f"📖 ReDoc文档: http://0.0.0.0:5000/redoc")
 
     uvicorn.run(
         "app.main:app",
@@ -96,4 +96,4 @@ if __name__ == "__main__":
     )
 
 
-# 运行命令示例: uvicorn app.main:app --reload --port 8000
+# 运行命令示例: uvicorn app.main:app --port 5000 --reload

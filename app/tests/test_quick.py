@@ -77,7 +77,7 @@ def test_document():
     print("=" * 60)
 
     # 读取可用测试文件
-    test_data_dir = Path(__file__).parent / "data" / "test"
+    test_data_dir = Path(__file__).parent / "data" / "docx"
     # test_files = list(test_data_dir.glob("*.pdf"))
     extensions = ["*.docx", "*.doc", "*.pptx", "*.ppt", "*.pdf"]  # 支持多格式文档
     test_files = []
