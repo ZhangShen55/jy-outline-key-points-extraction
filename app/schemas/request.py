@@ -1,6 +1,7 @@
 """
 请求模型
 """
+from typing import Any, Dict, List
 from pydantic import BaseModel, Field
 
 
@@ -17,3 +18,11 @@ class ProcessRequest(BaseModel):
                 "filename": "example.pdf",
             }
         }
+
+
+class LessonAnalyzeRequest(BaseModel):
+    """课堂语音转写内容教案大纲匹配分析"""
+
+    syllabus_result: Dict[str, Any] = Field(..., description="大纲提取结果（含 course + result 字段）")
+    text_segments: List[Dict[str, Any]] = Field(..., description="语音转写段落列表 [{text, bg, ed}, ...]")
+    filename: str = Field(..., description="课程文件名（用于任务标识）")
