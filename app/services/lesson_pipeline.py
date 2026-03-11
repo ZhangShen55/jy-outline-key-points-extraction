@@ -201,6 +201,35 @@ def _extract_points_from_chapters(
     return points
 
 
+def _realign_snippet(snippet: str, full_text: str) -> str:
+    """将 LLM 返回的 text_snippet 对齐到 full_text 中重合度最高的完整句子。"""
+    if not snippet or not full_text:
+        return snippet
+
+    # 按句末标点切分 full_text 为完整句子
+    sentences = re.split(r'(?<=[。！？!?])', full_text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    if not sentences:
+        return snippet
+
+    # 用字级别集合交集计算重合度
+    snippet_chars = set(snippet)
+    best_sentence = sentences[0]
+    best_score = 0
+
+    for sent in sentences:
+        sent_chars = set(sent)
+        overlap = len(snippet_chars & sent_chars)
+        # 用 Jaccard 相似度
+        union = len(snippet_chars | sent_chars)
+        score = overlap / union if union > 0 else 0
+        if score > best_score:
+            best_score = score
+            best_sentence = sent
+
+    return best_sentence
+
+
 # ─── 段落-知识点匹配 ──────────────────────────────────────────────────────────
 
 async def _match_one_segment(
@@ -248,6 +277,9 @@ async def _match_one_segment(
             ms["full_text"] = seg["text"]
             ms["bg"] = seg["bg"]
             ms["ed"] = seg["ed"]
+            # 将 LLM 返回的 snippet 对齐到 full_text 中的原始完整句子
+            if ms.get("text_snippet"):
+                ms["text_snippet"] = _realign_snippet(ms["text_snippet"], seg["text"])
         return data, usage
     except Exception as e:
         logger.debug(f"段落匹配解析失败 {seg['seg_id']}: {e}")
