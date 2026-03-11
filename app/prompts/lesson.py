@@ -24,8 +24,8 @@ CHAPTER_MATCH_USER_TEMPLATE = """你是一位课程教学分析专家。
 
 SEGMENT_MATCH_SYSTEM = "你只回答合法 JSON"
 
-SEGMENT_MATCH_USER_TEMPLATE = """你是一位课程教学分析专家。
-给定一段课堂语音转写文本和章节四要点列表，判断该段文本是否与某个知识点匹配。
+SEGMENT_MATCH_USER_TEMPLATE = """你是一位{course}课程教学分析专家。
+给定一段该课堂语音转写文本和章节四要点列表，判断该段文本是否与某个知识点匹配。
 
 【段落信息】
 seg_id: {seg_id}
@@ -43,7 +43,7 @@ ed: {ed}
 3. 如果没有任何知识点与该段文本匹配，返回 null
 
 匹配时严格返回如下 JSON（单行）：
-{{"category":"basic|keypoints|difficulty|politics","title":"知识点标题","matched_lexicon":["词1"],"matched_segments":[{{"seg_id":"{seg_id}","text_snippet":"最相关句子片段30字以内","match_level":"高|中|低","reason":"匹配原因30字以内","full_text":"段落完整文本","bg":"{bg}","ed":"{ed}"}}],"point_match_level":"高|中|低"}}
+{{"category":"<basic/keypoints/difficulty/politics>","title":"<知识点标题>","matched_lexicon":["<命中的关键词1>", "<命中的关键词2>"],"matched_segments":[{{"seg_id":"{seg_id}","text_snippet":"<文本内容中与知识点相关最关键的一句话>","match_level":"<优秀/深度/常规/浅层>","reason":"<匹配理由>"}}]}}
 
 不匹配时返回：{{"no_match": true}}
 

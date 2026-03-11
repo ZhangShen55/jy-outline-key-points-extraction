@@ -36,7 +36,7 @@ logger = get_logger(__name__)
 
 # ─── 段落合并 ─────────────────────────────────────────────────────────────────
 
-def merge_text_segments(raw_segments: List[dict], target_chars: int = 150) -> List[dict]:
+def merge_text_segments(raw_segments: List[dict], target_chars: int = 200) -> List[dict]:
     """
     两步合并：
     1. 按句末标点（。！？）合并短句 → 句子
@@ -104,15 +104,27 @@ def merge_text_segments(raw_segments: List[dict], target_chars: int = 150) -> Li
 
 # ─── 章节匹配 ─────────────────────────────────────────────────────────────────
 
+def _flatten_content(content) -> dict:
+    """将 content 列表 [{"basic": [...]}, {"keypoints": [...]}] 展平为单个字典。"""
+    if isinstance(content, dict):
+        return content
+    flat = {}
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict):
+                flat.update(item)
+    return flat
+
+
 def _build_chapters_summary(syllabus_result: dict) -> str:
     """将大纲结果压缩为章节摘要字符串。"""
     lines = []
     chapters = syllabus_result.get("result", [])
     for ch in chapters:
         chapter_title = ch.get("chapter", "")
-        content = ch.get("content", {})
+        content = _flatten_content(ch.get("content", {}))
         titles = []
-        for cat in ("basic", "key_points", "difficult_points", "politics"):
+        for cat in ("basic", "key_points", "keypoints", "difficult_points", "difficulty", "politics"):
             items = content.get(cat, [])
             for item in items:
                 t = item.get("title", "")
@@ -169,11 +181,13 @@ def _extract_points_from_chapters(
     for ch in syllabus_result.get("result", []):
         if ch.get("chapter", "") not in matched_titles:
             continue
-        content = ch.get("content", {})
+        content = _flatten_content(ch.get("content", {}))
         cat_map = {
             "basic": "basic",
             "key_points": "keypoints",
+            "keypoints": "keypoints",
             "difficult_points": "difficulty",
+            "difficulty": "difficulty",
             "politics": "politics",
         }
         for src_key, cat in cat_map.items():
@@ -194,9 +208,11 @@ async def _match_one_segment(
     points: List[dict],
     model: str,
     semaphore: asyncio.Semaphore,
+    course: str = "",
 ) -> Tuple[Optional[dict], Dict]:
     async with semaphore:
         user_prompt = SEGMENT_MATCH_USER_TEMPLATE.format(
+            course=course,
             seg_id=seg["seg_id"],
             bg=seg["bg"],
             ed=seg["ed"],
@@ -227,10 +243,11 @@ async def _match_one_segment(
         data = json.loads(json_repair.repair_json(stripped))
         if not data or not isinstance(data, dict) or data.get("no_match"):
             return None, usage
-        # 确保 full_text 字段存在
+        # 代码侧补入原始字段，避免 LLM 篡改
         for ms in data.get("matched_segments", []):
-            if not ms.get("full_text"):
-                ms["full_text"] = seg["text"]
+            ms["full_text"] = seg["text"]
+            ms["bg"] = seg["bg"]
+            ms["ed"] = seg["ed"]
         return data, usage
     except Exception as e:
         logger.debug(f"段落匹配解析失败 {seg['seg_id']}: {e}")
@@ -242,10 +259,11 @@ async def match_segments_to_points(
     points: List[dict],
     model: str,
     concurrency: int = 8,
+    course: str = "",
 ) -> Tuple[List[Optional[dict]], List[Dict]]:
     semaphore = asyncio.Semaphore(concurrency)
     tasks = [
-        _match_one_segment(seg, points, model, semaphore)
+        _match_one_segment(seg, points, model, semaphore, course=course)
         for seg in merged_segments
     ]
     results = await asyncio.gather(*tasks)
@@ -371,6 +389,7 @@ async def run_lesson_pipeline(
     """
     settings = get_settings()
     model = settings.LLM_MODEL
+    course = syllabus_result.get("course", "")
     total_start = time.time()
     all_usages = []
 
@@ -401,7 +420,7 @@ async def run_lesson_pipeline(
 
     logger.info("[3d] 并发段落-知识点匹配...")
     seg_matches, seg_usages = await match_segments_to_points(
-        merged_segments, points, model, concurrency=8
+        merged_segments, points, model, concurrency=8, course=course
     )
     all_usages.extend(seg_usages)
 
@@ -422,15 +441,15 @@ async def run_lesson_pipeline(
     total_usage = sum_usage(all_usages)
 
     result = {
-        "source_file": filename,
+        # "source_file": filename,
         "primary_chapters": primary_chapters,
-        "original_segments": original_count,
-        "merged_segments_count": len(merged_segments),
-        "merged_segments": merged_segments,
-        "mindmap": mindmap_result,
+        # "original_segments": original_count,
+        # "merged_segments_count": len(merged_segments),
+        # "merged_segments": merged_segments,
+        # "mindmap": mindmap_result,
         "match_result": match_result,
-        "model": model,
-        "usage": total_usage,
+        # "model": model,
+        # "usage": total_usage,
     }
 
     elapsed = time.time() - total_start
