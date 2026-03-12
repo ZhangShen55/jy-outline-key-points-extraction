@@ -21,7 +21,7 @@ _settings = get_settings()
 _semaphore = asyncio.Semaphore(_settings.MAX_CONCURRENT)
 
 
-async def _run_lesson_background(task_id: str, syllabus_result: dict, text_segments: list, filename: str):
+async def _run_lesson_background(task_id: str, syllabus_result: dict, text_segments: list):
     try:
         async with _semaphore:
             tasks[task_id]["status"] = "processing"
@@ -30,7 +30,7 @@ async def _run_lesson_background(task_id: str, syllabus_result: dict, text_segme
             logger.info(f"🔄 开始处理课堂分析任务 {task_id}")
 
             from app.services.lesson_pipeline import run_lesson_pipeline
-            result = await run_lesson_pipeline(syllabus_result, text_segments, filename)
+            result = await run_lesson_pipeline(syllabus_result, text_segments)
 
             tasks[task_id]["status"] = "completed"
             tasks[task_id]["result"] = result
@@ -59,7 +59,6 @@ async def analyze_lesson(request: LessonAnalyzeRequest, background_tasks: Backgr
         tasks[task_id] = {
             "task_id": task_id,
             "status": "pending",
-            "filename": request.filename,
             "message": "任务已提交，等待处理...",
             "result": None,
             "error": None,
@@ -71,10 +70,9 @@ async def analyze_lesson(request: LessonAnalyzeRequest, background_tasks: Backgr
             task_id,
             request.syllabus_result,
             request.text_segments,
-            request.filename,
         )
 
-        logger.info(f"📝 课堂分析任务 {task_id} 已提交，文件: {request.filename}")
+        logger.info(f"📝 课堂分析任务 {task_id} 已提交")
 
         return TaskResponse(
             task_id=task_id,

@@ -406,7 +406,6 @@ def _build_summary(overall: dict, category_coverage: dict) -> str:
 async def run_lesson_pipeline(
     syllabus_result: dict,
     text_segments: List[dict],
-    filename: str,
 ) -> dict:
     """
     课堂语音转写分析主管道。
@@ -414,7 +413,6 @@ async def run_lesson_pipeline(
     Args:
         syllabus_result: 大纲提取结果（含 course + result 字段）
         text_segments: 语音转写段落列表 [{text, bg, ed}, ...]
-        filename: 课程文件名
 
     Returns:
         分析结果字典
@@ -473,7 +471,6 @@ async def run_lesson_pipeline(
     total_usage = sum_usage(all_usages)
 
     result = {
-        # "source_file": filename,
         "primary_chapters": primary_chapters,
         # "original_segments": original_count,
         # "merged_segments_count": len(merged_segments),

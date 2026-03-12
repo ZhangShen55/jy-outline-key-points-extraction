@@ -25,4 +25,3 @@ class LessonAnalyzeRequest(BaseModel):
 
     syllabus_result: Dict[str, Any] = Field(..., description="大纲提取结果（含 course + result 字段）")
     text_segments: List[Dict[str, Any]] = Field(..., description="语音转写段落列表 [{text, bg, ed}, ...]")
-    filename: str = Field(..., description="课程文件名（用于任务标识）")
