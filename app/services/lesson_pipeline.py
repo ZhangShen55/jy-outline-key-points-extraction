@@ -20,6 +20,8 @@ import json_repair
 from app.core.config import get_settings
 from app.core.logging_config import get_logger
 from app.prompts.lesson import (
+    ALERTS_SYSTEM,
+    ALERTS_USER_TEMPLATE,
     CHAPTER_MATCH_SYSTEM,
     CHAPTER_MATCH_USER_TEMPLATE,
     SEGMENT_MATCH_SYSTEM,
@@ -134,17 +136,62 @@ def _build_chapters_summary(syllabus_result: dict) -> str:
     return "\n".join(lines)
 
 
+def _build_skims_text(document_skims) -> str:
+    if isinstance(document_skims, dict):
+        document_skims = [document_skims]
+    if not document_skims:
+        return "无"
+    lines = []
+    for skim in document_skims:
+        time_range = skim.get("time", "")
+        overview = skim.get("overview", "")
+        content = skim.get("content", "")
+        lines.append(f"[{time_range}] {overview}\n  → {content}")
+    return "\n\n".join(lines)
+
+
+def _build_mindmap_text(mindmap: dict, indent: int = 0) -> str:
+    if not mindmap:
+        return "无"
+    nodes = mindmap.get("nodes", [])
+    if not nodes:
+        return "无"
+    lines = []
+    for node in nodes:
+        prefix = "  " * indent
+        label = node.get("label", "")
+        node_id = node.get("id", "")
+        lines.append(f"{prefix}{node_id}. {label}")
+        children = node.get("children", [])
+        if children:
+            for child in children:
+                lines.append(_build_mindmap_text({"nodes": [child]}, indent + 1))
+    return "\n".join(lines)
+
+
 async def match_chapters(
     syllabus_result: dict,
-    key_points: List[str],
+    mindmap_result: dict,
     model: str,
 ) -> Tuple[List[dict], Dict]:
     chapters_summary = _build_chapters_summary(syllabus_result)
+    course_name = syllabus_result.get("course", "")
+    overview = mindmap_result.get("overview", mindmap_result)
+    key_points = overview.get("key_points", [])
     key_points_str = "\n".join(f"- {kp}" for kp in key_points)
 
+    overall_label = overview.get("mindmap", {}).get("overall_label", "")
+    skims_text = _build_skims_text(overview.get("document_skims", []))
+    mindmap_text = _build_mindmap_text(overview.get("mindmap", {}))
+
+
     user_prompt = CHAPTER_MATCH_USER_TEMPLATE.format(
+        course_name=course_name,
         chapters_summary=chapters_summary,
         key_points=key_points_str,
+        overall_label=overall_label,
+        skims_text=skims_text,
+        mindmap_text=mindmap_text,
     )
 
     content, usage = await chat_raw(
@@ -153,8 +200,8 @@ async def match_chapters(
         model=model,
         max_tokens=512,
         temperature=0.3,
-        top_p=0.9,
-        presence_penalty=0.0,
+        # top_p=0.9,
+        # presence_penalty=0.0,
         # response_format={"type": "json_object"},
     )
 
@@ -256,8 +303,8 @@ async def _match_one_segment(
                 model=model,
                 max_tokens=1024,
                 temperature=0.3,
-                top_p=0.9,
-                presence_penalty=0.0,
+                # top_p=0.9,
+                # presence_penalty=0.0,
                 # response_format={"type": "json_object"},
             )
         except Exception as e:
@@ -306,12 +353,25 @@ async def match_segments_to_points(
 
 # ─── 汇总匹配结果 ─────────────────────────────────────────────────────────────
 
+CAT_ORDER = {"basic": 0, "keypoints": 1, "difficulty": 2, "politics": 3}
+
+
+def _coverage_level(matched: int, total: int) -> str:
+    if total == 0:
+        return "无"
+    ratio = matched / total
+    if ratio >= 0.7:
+        return "高"
+    if ratio >= 0.4:
+        return "中"
+    return "低"
+
+
 def _compute_coverage(
     matches: List[Optional[dict]],
     points: List[dict],
     total_segments: int,
 ) -> dict:
-    # 按 category 统计
     cat_totals: Dict[str, int] = {}
     cat_matched: Dict[str, set] = {}
     for p in points:
@@ -335,14 +395,25 @@ def _compute_coverage(
         for ms in m.get("matched_segments", []):
             matched_seg_ids.add(ms.get("seg_id", ""))
 
+    # matches 按 category 顺序 + seg_id 排序
+    valid_matches.sort(key=lambda m: (
+        CAT_ORDER.get(m.get("category", ""), 99),
+        m.get("matched_segments", [{}])[0].get("seg_id", "") if m.get("matched_segments") else "",
+    ))
+
+    # 按固定顺序输出 category_coverage
     category_coverage = {}
-    for cat, total in cat_totals.items():
+    for cat in ("basic", "keypoints", "difficulty", "politics"):
+        total = cat_totals.get(cat, 0)
         matched_count = len(cat_matched.get(cat, set()))
-        pct = f"{matched_count / total * 100:.0f}%" if total > 0 else "0%"
+        if total == 0:
+            continue
+        pct = f"{matched_count / total * 100:.0f}%"
         category_coverage[cat] = {
             "total": total,
             "matched": matched_count,
             "coverage": pct,
+            "level": _coverage_level(matched_count, total),
         }
 
     total_points = len(points)
@@ -350,9 +421,6 @@ def _compute_coverage(
     coverage_pct = f"{matched_points / total_points * 100:.0f}%" if total_points > 0 else "0%"
     matched_segs = len(matched_seg_ids)
     seg_pct = f"{matched_segs / total_segments * 100:.2f}%" if total_segments > 0 else "0%"
-
-    ratio = matched_points / total_points if total_points > 0 else 0
-    level = "高" if ratio >= 0.7 else ("中" if ratio >= 0.4 else "低")
 
     return {
         "matches": valid_matches,
@@ -364,7 +432,7 @@ def _compute_coverage(
             "total_segments": total_segments,
             "matched_segments": matched_segs,
             "segment_coverage": seg_pct,
-            "level": level,
+            "level": _coverage_level(matched_points, total_points),
         },
     }
 
@@ -401,6 +469,56 @@ def _build_summary(overall: dict, category_coverage: dict) -> str:
     )
 
 
+async def _build_alerts(
+    course_name: str,
+    primary_chapters: List[int],
+    overall_coverage: dict,
+    category_coverage: dict,
+    unmatched_points: List[dict],
+    matches: List[Optional[dict]],
+    model: str,
+) -> Tuple[dict, dict]:
+    ch_str = "、".join(str(c) for c in primary_chapters) if primary_chapters else "未知"
+
+    # 统计匹配深度分布
+    depth_counter: Dict[str, int] = {}
+    for m in matches:
+        if m is None:
+            continue
+        for ms in m.get("matched_segments", []):
+            lv = ms.get("match_level", "未知")
+            depth_counter[lv] = depth_counter.get(lv, 0) + 1
+
+    user_msg = ALERTS_USER_TEMPLATE.format(
+        course_name=course_name,
+        chapters=ch_str,
+        overall_json=json.dumps(overall_coverage, ensure_ascii=False),
+        category_json=json.dumps(category_coverage, ensure_ascii=False),
+        unmatched_json=json.dumps(unmatched_points, ensure_ascii=False),
+        depth_json=json.dumps(depth_counter, ensure_ascii=False),
+    )
+
+    raw, usage = await chat_raw(system_prompt=ALERTS_SYSTEM, user_prompt=user_msg, model=model)
+    data = json_repair.loads(raw)
+
+    valid_types = {
+        "coverage_insufficient", "keypoints_uncovered",
+        "difficulty_uncovered", "ideology_missing", "shallow_teaching",
+    }
+    alert_types = [t for t in data.get("type", []) if t in valid_types]
+    message = data.get("message", "")
+
+    # 后处理：确保 message 中章节号按升序排列
+    sorted_ch_str = "、".join(str(c) for c in sorted(primary_chapters)) if primary_chapters else "未知"
+    message = re.sub(
+        r"第[\d、]+章节",
+        f"第{sorted_ch_str}章节",
+        message,
+    )
+
+    return {"type": alert_types, "message": message}, usage
+
+
 # ─── 主管道 ───────────────────────────────────────────────────────────────────
 
 async def run_lesson_pipeline(
@@ -432,12 +550,11 @@ async def run_lesson_pipeline(
     )
     all_usages.append(mindmap_usage)
 
-    key_points = mindmap_result.get("key_points", [])
-    logger.info(f"[2/5] 章节匹配，key_points 数: {len(key_points)}")
-    matched_chapters, chapter_usage = await match_chapters(syllabus_result, key_points, model)
+    logger.info("[2/5] 章节匹配...")
+    matched_chapters, chapter_usage = await match_chapters(syllabus_result, mindmap_result, model)
     all_usages.append(chapter_usage)
 
-    primary_chapters = [ch.get("num", 0) for ch in matched_chapters if ch.get("num")]
+    primary_chapters = sorted(ch.get("num", 0) for ch in matched_chapters if ch.get("num"))
     logger.info(f"匹配章节: {matched_chapters}")
 
     logger.info("[3/5] 段落合并...")
@@ -459,15 +576,28 @@ async def run_lesson_pipeline(
     unmatched = _build_unmatched_points(seg_matches, points)
     summary_text = _build_summary(coverage["overall_coverage"], coverage["category_coverage"])
 
+    logger.info("[5/5] 生成教学预警...")
+    alerts, alerts_usage = await _build_alerts(
+        course,
+        primary_chapters,
+        coverage["overall_coverage"],
+        coverage["category_coverage"],
+        unmatched,
+        coverage["matches"],
+        model,
+    )
+    all_usages.append(alerts_usage)
+
     match_result = {
         "matches": coverage["matches"],
         "unmatched_points": unmatched,
         "category_coverage": coverage["category_coverage"],
         "overall_coverage": coverage["overall_coverage"],
         "summary": summary_text,
+        "alerts": alerts,
     }
 
-    logger.info("[5/5] 组装最终输出...")
+    logger.info("组装最终输出...")
     total_usage = sum_usage(all_usages)
 
     result = {

@@ -139,10 +139,14 @@ async def process_document(request: ProcessRequest, background_tasks: Background
     """
     settings = get_settings()
     try:
-        task_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
-        orig_name = Path(request.filename).stem
+
+        
+        task_id = f"syllabus-{uuid.uuid4().hex[:24]}"
+        orig_name = Path(request.filename or "document.pdf").stem
+
 
         pdf_filedata = prepare_pdf_base64(request.filedata, request.filename)
+
 
         # base64 落盘，减少排队期间内存占用
         tmp_fd, tmp_file = tempfile.mkstemp(suffix=".b64", prefix=f"task_{task_id}_")
@@ -193,7 +197,7 @@ async def get_task_status(task_id: str):
         task_id=task_id,
         status=task["status"],
         message=task["message"],
-        filename=task["filename"],
+        filename=task.get("filename", ""),
         created_at=task["created_at"],
         started_at=task.get("started_at"),
         completed_at=task.get("completed_at"),
