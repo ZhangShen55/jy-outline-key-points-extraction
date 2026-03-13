@@ -134,6 +134,13 @@ regex==2025.8.29
 # 配置文件
 tomli==2.2.1
 PyYAML==6.0.2
+pydantic-settings>=2.0.0
+
+# 数据库
+sqlalchemy>=2.0.0
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.0
+pgvector>=0.3.0
 
 # 序列化
 jsonpickle==4.0.2

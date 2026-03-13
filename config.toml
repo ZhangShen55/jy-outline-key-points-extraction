@@ -16,6 +16,13 @@ max_concurrent = 10
 # 等待队列上限，超出后返回 429
 max_queue = 10
 
+[database]
+host = "localhost"
+port = 54320
+user = "postgres"
+password = "Hz_edu123#"
+name = "syllabus_db"
+
 [logging]
 level = "INFO"
 format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

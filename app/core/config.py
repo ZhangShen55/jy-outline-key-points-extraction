@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     MAX_CONCURRENT: int = _toml.get("concurrency", {}).get("max_concurrent", 10)
     MAX_QUEUE: int = _toml.get("concurrency", {}).get("max_queue", 10)
 
+    # 数据库配置
+    DB_HOST: str = _toml.get("database", {}).get("host", "localhost")
+    DB_PORT: int = _toml.get("database", {}).get("port", 54320)
+    DB_USER: str = _toml.get("database", {}).get("user", "postgres")
+    DB_PASSWORD: str = _toml.get("database", {}).get("password", "")
+    DB_NAME: str = _toml.get("database", {}).get("name", "syllabus_db")
+
     # 日志配置
     LOG_LEVEL: str = _toml.get("logging", {}).get("level", "INFO")
     LOG_FILE: str = _toml.get("logging", {}).get("file", "app.log")
