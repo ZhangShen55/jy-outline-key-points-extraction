@@ -24,17 +24,31 @@ class TaskResponse(BaseModel):
     message: str = Field(..., description="状态消息")
 
 
+class QueueInfo(BaseModel):
+    """队列信息"""
+    total: int
+    list: List[str]
+
+
 class TaskStatusResponse(BaseModel):
     """任务状态响应"""
 
     task_id: str
-    status: str
+    status: int  # 0=completed, 1=pending, 2=queued, 3=processing, 4=failed
     message: str
-    filename: str
+
+    # 时间信息
     created_at: str
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
-    failed_at: Optional[str] = None
+    elapsed_time: Optional[float] = None
+
+    # 队列信息
+    queued: QueueInfo
+    processing: QueueInfo
+
+    # 结果和错误
+    filename: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
@@ -44,6 +58,22 @@ class TaskListResponse(BaseModel):
 
     stats: Dict[str, int] = Field(..., description="任务统计")
     tasks: List[Dict[str, Any]] = Field(..., description="任务列表")
+
+
+class TaskTypeStats(BaseModel):
+    """任务类型统计"""
+    total: int
+    completed: int
+    failed: int
+    queued: QueueInfo
+    processing: QueueInfo
+
+
+class SystemStatusResponse(BaseModel):
+    """系统状态响应"""
+    system: Dict[str, Any]
+    syllabus: TaskTypeStats
+    lesson: TaskTypeStats
 
 
 class HealthResponse(BaseModel):

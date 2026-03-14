@@ -45,22 +45,16 @@ class TaskService:
         db: AsyncSession,
         task_id: str,
         status: int,
-        stage: Optional[str] = None,
-        progress: Optional[int] = None,
         error: Optional[str] = None,
     ) -> None:
         """更新任务状态"""
         update_data: Dict[str, Any] = {"status": status, "updated_at": datetime.utcnow()}
 
-        if stage is not None:
-            update_data["stage"] = stage
-        if progress is not None:
-            update_data["progress"] = progress
         if error is not None:
             update_data["error"] = error
 
         # 根据状态设置时间戳
-        if status == TaskStatus.PROCESSING and "started_at" not in update_data:
+        if status == TaskStatus.PROCESSING:
             update_data["started_at"] = datetime.utcnow()
         elif status == TaskStatus.COMPLETED:
             update_data["completed_at"] = datetime.utcnow()
@@ -86,7 +80,6 @@ class TaskService:
                 result=result,
                 elapsed_time=elapsed_time,
                 completed_at=datetime.utcnow(),
-                progress=100,
                 updated_at=datetime.utcnow(),
             )
         )
@@ -108,15 +101,79 @@ class TaskService:
         await db.commit()
 
     @staticmethod
-    async def get_queue_stats(db: AsyncSession) -> Dict[str, int]:
-        """获取队列统计信息"""
+    async def get_queue_stats(db: AsyncSession, task_type: Optional[str] = None) -> Dict[str, Any]:
+        """
+        获取队列统计信息
+
+        Args:
+            task_type: 可选，筛选任务类型（syllabus/lesson）
+
+        Returns:
+            {
+                "queued": {"total": 2, "list": ["task-1", "task-2"]},
+                "processing": {"total": 1, "list": ["task-3"]}
+            }
+        """
+        # 构建查询条件
+        conditions = [Task.status.in_([TaskStatus.QUEUED, TaskStatus.PROCESSING])]
+        if task_type:
+            conditions.append(Task.task_type == task_type)
+
+        # 查询排队中的任务（按创建时间排序）
+        queued_result = await db.execute(
+            select(Task.task_id)
+            .where(Task.status == TaskStatus.QUEUED)
+            .where(Task.task_type == task_type if task_type else True)
+            .order_by(Task.created_at.asc())
+        )
+        queued_list = [row[0] for row in queued_result.all()]
+
+        # 查询处理中的任务（按开始时间排序）
+        processing_result = await db.execute(
+            select(Task.task_id)
+            .where(Task.status == TaskStatus.PROCESSING)
+            .where(Task.task_type == task_type if task_type else True)
+            .order_by(Task.started_at.asc())
+        )
+        processing_list = [row[0] for row in processing_result.all()]
+
+        return {
+            "queued": {"total": len(queued_list), "list": queued_list},
+            "processing": {"total": len(processing_list), "list": processing_list},
+        }
+
+    @staticmethod
+    async def get_task_type_stats(db: AsyncSession, task_type: str) -> Dict[str, Any]:
+        """
+        获取指定任务类型的统计信息
+
+        Args:
+            task_type: 任务类型（syllabus/lesson）
+
+        Returns:
+            {
+                "total": 100,
+                "completed": 95,
+                "failed": 3,
+                "queued": {...},
+                "processing": {...}
+            }
+        """
+        # 统计各状态数量
         result = await db.execute(
             select(Task.status, func.count(Task.id))
-            .where(Task.status.in_([TaskStatus.QUEUED, TaskStatus.PROCESSING]))
+            .where(Task.task_type == task_type)
             .group_by(Task.status)
         )
         stats = dict(result.all())
+
+        # 获取队列详情
+        queue_stats = await TaskService.get_queue_stats(db, task_type)
+
         return {
-            "queued": stats.get(TaskStatus.QUEUED, 0),
-            "processing": stats.get(TaskStatus.PROCESSING, 0),
+            "total": sum(stats.values()),
+            "completed": stats.get(TaskStatus.COMPLETED, 0),
+            "failed": stats.get(TaskStatus.FAILED, 0),
+            "queued": queue_stats["queued"],
+            "processing": queue_stats["processing"],
         }

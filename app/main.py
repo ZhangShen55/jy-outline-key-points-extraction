@@ -96,4 +96,6 @@ if __name__ == "__main__":
     )
 
 
+# 初始化数据库: python -m app.scripts.init_db
+
 # 运行命令示例: uvicorn app.main:app --port 5000 --reload

@@ -15,8 +15,6 @@ class Task(Base):
     task_id = Column(String(50), unique=True, nullable=False, index=True)
     task_type = Column(String(20), nullable=False, index=True)
     status = Column(SmallInteger, nullable=False, default=1, index=True)
-    stage = Column(String(50))
-    progress = Column(SmallInteger, default=0)
 
     filename = Column(String(255))
     file_size = Column(Integer)
@@ -29,6 +27,6 @@ class Task(Base):
 
     error = Column(Text)
     result = Column(JSONB)
-    metadata = Column(JSONB)
+    extra_data = Column(JSONB)
 
     updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)

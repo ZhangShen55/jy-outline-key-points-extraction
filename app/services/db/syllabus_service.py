@@ -7,6 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.syllabus import Syllabus, Chapter, KnowledgePoint, Lexicon
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class SyllabusService:
@@ -50,6 +53,18 @@ class SyllabusService:
         return result.scalar_one_or_none()
 
     @staticmethod
+    def _flatten_content(content) -> dict:
+        """展平 content 列表为字典"""
+        if isinstance(content, dict):
+            return content
+        flat = {}
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict):
+                    flat.update(item)
+        return flat
+
+    @staticmethod
     async def save_full_syllabus(
         db: AsyncSession,
         task_id: str,
@@ -64,40 +79,72 @@ class SyllabusService:
         )
 
         # 2. 解析并保存章节、知识点、词库
-        keywords = result.get("result", {}).get("keywords", [])
-        for kw in keywords:
-            chapter_title = kw.get("chapter", "")
-            chapter_num = SyllabusService._extract_chapter_num(chapter_title)
+        result_data = result.get("result", {})
 
-            chapter = Chapter(
-                syllabus_id=syllabus.id,
-                chapter_num=chapter_num,
-                chapter_title=chapter_title,
-            )
-            db.add(chapter)
-            await db.flush()
+        # 兼容两种结构：
+        # 1. result["result"] = {"keywords": [...], "usage": {...}}
+        # 2. result["result"] = [...]  (直接是 keywords 列表)
+        if isinstance(result_data, dict):
+            keywords = result_data.get("keywords", [])
+        elif isinstance(result_data, list):
+            keywords = result_data
+        else:
+            keywords = []
 
-            content = kw.get("content", {})
-            for category in ["basic", "keypoints", "difficulty", "politics"]:
-                items = content.get(category, [])
-                for item in items:
-                    kp = KnowledgePoint(
-                        chapter_id=chapter.id,
-                        category=category,
-                        title=item.get("title", ""),
-                        summary=item.get("summary", ""),
-                    )
-                    db.add(kp)
-                    await db.flush()
+        for idx, kw in enumerate(keywords):
+            try:
+                # 类型检查：确保 kw 是字典
+                if not isinstance(kw, dict):
+                    logger.warning(f"跳过第 {idx+1} 个元素，类型错误: {type(kw)}")
+                    continue
 
-                    lexicon_list = item.get("lexicon", [])
-                    for term in lexicon_list:
-                        lexicon = Lexicon(
-                            knowledge_point_id=kp.id,
-                            term=term,
-                            embedding=None,  # 向量后续异步生成
+                chapter_title = kw.get("chapter", "")
+                chapter_num = SyllabusService._extract_chapter_num(chapter_title)
+
+                chapter = Chapter(
+                    syllabus_id=syllabus.id,
+                    chapter_num=chapter_num,
+                    chapter_title=chapter_title,
+                )
+                db.add(chapter)
+                await db.flush()
+
+                content = SyllabusService._flatten_content(kw.get("content", {}))
+                for category in ["basic", "keypoints", "difficulty", "politics"]:
+                    items = content.get(category, [])
+                    if not isinstance(items, list):
+                        continue
+
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+
+                        kp = KnowledgePoint(
+                            chapter_id=chapter.id,
+                            category=category,
+                            title=item.get("title", ""),
+                            summary=item.get("summary", ""),
                         )
-                        db.add(lexicon)
+                        db.add(kp)
+                        await db.flush()
+
+                        lexicon_list = item.get("lexicon", [])
+                        if not isinstance(lexicon_list, list):
+                            lexicon_list = []
+
+                        for term in lexicon_list:
+                            if not term or not isinstance(term, str):
+                                continue
+                            lexicon = Lexicon(
+                                knowledge_point_id=kp.id,
+                                term=term,
+                                embedding=None,
+                            )
+                            db.add(lexicon)
+            except Exception as e:
+                import logging
+                logging.error(f"处理第 {idx+1} 章节时出错: {chapter_title}, 错误: {e}")
+                raise
 
         await db.commit()
         return syllabus.id

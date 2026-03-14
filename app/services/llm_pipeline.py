@@ -12,6 +12,7 @@ import asyncio
 import json
 import re
 import time
+import json_repair
 from typing import List, Dict, Any
 
 from openai import AsyncOpenAI
@@ -140,6 +141,8 @@ class LLMPipeline:
         
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
+        # logger.info(f"章节处理结果: results={results.json()}")
+
         # 收集处理成功的章节结果
         successful_results = []
         for i, result in enumerate(results):
@@ -171,7 +174,11 @@ class LLMPipeline:
             timeout=300
         )
         
-        result_json = json.loads(response.choices[0].message.content)
+        # print(f"章节提取原始响应: {response.choices[0].message.content}")
+
+        result_json = json.loads(json_repair.repair_json(response.choices[0].message.content))
+        
+
         
         return {
             'chapter_title': chapter_title,
