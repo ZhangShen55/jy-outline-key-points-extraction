@@ -66,9 +66,22 @@ async def analyze_lesson(
     """
     提交课堂语音转写分析任务（异步）
 
-    立即返回任务ID，使用 GET /api/v1/document/status/{task_id} 查询进度。
+    立即返回任务ID，使用 GET /api/v1/lesson/status/{task_id} 查询进度。
     """
     try:
+        # 1. 从数据库查询大纲结果
+        from app.services.db.syllabus_service import SyllabusService
+
+        syllabus = await SyllabusService.get_syllabus_by_task_id(db, request.syllabus_id)
+        if not syllabus:
+            raise HTTPException(
+                status_code=404,
+                detail=f"大纲 {request.syllabus_id} 不存在，请先使用 /process 接口提取大纲"
+            )
+
+        # 2. 使用数据库中的大纲结果
+        syllabus_result = syllabus.raw_result
+
         task_id = f"lesson-{uuid.uuid4().hex[:24]}"
 
         # 创建数据库任务记录
@@ -87,12 +100,12 @@ async def analyze_lesson(
         background_tasks.add_task(
             _run_lesson_background,
             task_id,
-            request.syllabus_result,
+            syllabus_result,
             request.text_segments,
             db,
         )
 
-        logger.info(f"📝 课堂分析任务 {task_id} 已提交")
+        logger.info(f"📝 课堂分析任务 {task_id} 已提交，关联大纲: {request.syllabus_id}")
 
         return TaskResponse(
             task_id=task_id,
@@ -100,6 +113,8 @@ async def analyze_lesson(
             message="任务已提交，请使用 GET /api/v1/lesson/status/{task_id} 查询处理进度",
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ 提交课堂分析任务失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))

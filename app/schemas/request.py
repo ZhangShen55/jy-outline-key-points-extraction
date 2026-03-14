@@ -23,5 +23,6 @@ class ProcessRequest(BaseModel):
 class LessonAnalyzeRequest(BaseModel):
     """课堂语音转写内容教案大纲匹配分析"""
 
-    syllabus_result: Dict[str, Any] = Field(..., description="大纲提取结果（含 course + result 字段）")
+    syllabus_id: str = Field(..., description="大纲任务ID（从 /process 接口返回的 task_id）")
+    # syllabus_result: Dict[str, Any] = Field(..., description="大纲提取结果（含 course + result 字段）")
     text_segments: List[Dict[str, Any]] = Field(..., description="语音转写段落列表 [{text, bg, ed}, ...]")
