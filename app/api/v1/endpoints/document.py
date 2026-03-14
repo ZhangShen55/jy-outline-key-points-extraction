@@ -215,15 +215,19 @@ async def process_document(
 @router.get("/status/{task_id}", response_model=TaskStatusResponse)
 async def get_task_status(task_id: str, db: AsyncSession = Depends(get_db)):
     """
-    查询任务状态
+    查询大纲提取任务状态
 
-    优先从数据库查询，如果数据库没有则查内存（处理中的任务）
+    只查询 /process 接口提交的任务，队列信息也只显示大纲提取任务
     """
     # 1. 先查数据库
     db_task = await TaskService.get_task_by_id(db, task_id)
     if db_task:
-        # 获取队列统计
-        queue_stats = await TaskService.get_queue_stats(db)
+        # 验证任务类型
+        if db_task.task_type != TaskType.SYLLABUS:
+            raise NotFoundException(message=f"任务 {task_id} 不是大纲提取任务")
+
+        # 获取大纲提取任务的队列统计
+        queue_stats = await TaskService.get_queue_stats(db, TaskType.SYLLABUS)
 
         return TaskStatusResponse(
             task_id=db_task.task_id,
@@ -243,7 +247,12 @@ async def get_task_status(task_id: str, db: AsyncSession = Depends(get_db)):
     # 2. 数据库没有，查内存
     if task_id in tasks:
         task = tasks[task_id]
-        queue_stats = await TaskService.get_queue_stats(db)
+
+        # 验证任务类型（通过task_id前缀判断）
+        if not task_id.startswith("syllabus-"):
+            raise NotFoundException(message=f"任务 {task_id} 不是大纲提取任务")
+
+        queue_stats = await TaskService.get_queue_stats(db, TaskType.SYLLABUS)
 
         return TaskStatusResponse(
             task_id=task_id,

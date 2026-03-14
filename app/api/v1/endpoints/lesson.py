@@ -14,8 +14,9 @@ from app.core.config import get_settings
 from app.core.logging_config import get_logger
 from app.core.database import get_db
 from app.core.constants import TaskStatus, TaskType
+from app.core.exceptions import NotFoundException
 from app.schemas.request import LessonAnalyzeRequest
-from app.schemas.response import TaskResponse
+from app.schemas.response import TaskResponse, TaskStatusResponse
 from app.services.db.task_service import TaskService
 
 logger = get_logger(__name__)
@@ -68,7 +69,7 @@ async def analyze_lesson(
     立即返回任务ID，使用 GET /api/v1/document/status/{task_id} 查询进度。
     """
     try:
-        task_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+        task_id = f"lesson-{uuid.uuid4().hex[:24]}"
 
         # 创建数据库任务记录
         await TaskService.create_task(
@@ -96,9 +97,82 @@ async def analyze_lesson(
         return TaskResponse(
             task_id=task_id,
             status="pending",
-            message="任务已提交，请使用 GET /api/v1/document/status/{task_id} 查询处理进度",
+            message="任务已提交，请使用 GET /api/v1/lesson/status/{task_id} 查询处理进度",
         )
 
     except Exception as e:
         logger.error(f"❌ 提交课堂分析任务失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/status/{task_id}", response_model=TaskStatusResponse)
+async def get_lesson_status(task_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    查询课堂分析任务状态
+
+    只查询 /analyze 接口提交的任务，队列信息也只显示课堂分析任务
+    """
+    # 1. 先查数据库
+    db_task = await TaskService.get_task_by_id(db, task_id)
+    if db_task:
+        # 验证任务类型
+        if db_task.task_type != TaskType.LESSON:
+            raise NotFoundException(message=f"任务 {task_id} 不是课堂分析任务")
+
+        # 获取课堂分析任务的队列统计
+        queue_stats = await TaskService.get_queue_stats(db, TaskType.LESSON)
+
+        return TaskStatusResponse(
+            task_id=db_task.task_id,
+            status=db_task.status,
+            message=_build_message(db_task.status),
+            created_at=db_task.created_at.isoformat(),
+            started_at=db_task.started_at.isoformat() if db_task.started_at else None,
+            completed_at=db_task.completed_at.isoformat() if db_task.completed_at else None,
+            elapsed_time=db_task.elapsed_time,
+            queued=queue_stats["queued"],
+            processing=queue_stats["processing"],
+            filename=db_task.filename,
+            result=db_task.result,
+            error=db_task.error,
+        )
+
+    # 2. 数据库没有，查内存
+    if task_id in tasks:
+        task = tasks[task_id]
+
+        # 验证任务类型（通过task_id前缀判断）
+        if not task_id.startswith("chatcmpl-"):
+            raise NotFoundException(message=f"任务 {task_id} 不是课堂分析任务")
+
+        queue_stats = await TaskService.get_queue_stats(db, TaskType.LESSON)
+
+        return TaskStatusResponse(
+            task_id=task_id,
+            status=task.get("status", TaskStatus.PENDING),
+            message=task.get("message", ""),
+            created_at=task.get("created_at", ""),
+            started_at=task.get("started_at"),
+            completed_at=task.get("completed_at"),
+            elapsed_time=None,
+            queued=queue_stats["queued"],
+            processing=queue_stats["processing"],
+            filename=task.get("filename"),
+            result=task.get("result"),
+            error=task.get("error"),
+        )
+
+    raise NotFoundException(message=f"任务 {task_id} 不存在")
+
+
+def _build_message(status: int) -> str:
+    """根据状态码构建消息"""
+    if status == TaskStatus.COMPLETED:
+        return "处理完成"
+    if status == TaskStatus.FAILED:
+        return "处理失败"
+    if status == TaskStatus.QUEUED:
+        return "排队等待中..."
+    if status == TaskStatus.PROCESSING:
+        return "处理中..."
+    return "任务已提交"
