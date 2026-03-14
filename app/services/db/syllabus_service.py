@@ -99,7 +99,10 @@ class SyllabusService:
                     continue
 
                 chapter_title = kw.get("chapter", "")
-                chapter_num = SyllabusService._extract_chapter_num(chapter_title)
+                # 优先使用 num 字段，不存在时从标题解析
+                chapter_num = kw.get("num", 0)
+                if chapter_num == 0:
+                    chapter_num = SyllabusService._extract_chapter_num(chapter_title)
 
                 chapter = Chapter(
                     syllabus_id=syllabus.id,
@@ -156,3 +159,184 @@ class SyllabusService:
 
         match = re.search(r"第?(\d+)[章节]", chapter_title)
         return int(match.group(1)) if match else 0
+
+    @staticmethod
+    async def get_lexicons(
+        db: AsyncSession,
+        task_id: str,
+        chapter_num: int,
+        point_title: str,
+        category: str,
+    ) -> Optional[Dict[str, Any]]:
+        """查询指定知识点的词库"""
+        result = await db.execute(
+            select(KnowledgePoint, Chapter)
+            .join(Chapter)
+            .join(Syllabus)
+            .where(
+                Syllabus.task_id == task_id,
+                Chapter.chapter_num == chapter_num,
+                KnowledgePoint.title == point_title,
+                KnowledgePoint.category == category,
+            )
+            .options(selectinload(KnowledgePoint.lexicons))
+        )
+        row = result.first()
+        if not row:
+            return None
+
+        point, chapter = row
+        return {
+            "task_id": task_id,
+            "chapter_num": chapter.chapter_num,
+            "chapter_title": chapter.chapter_title,
+            "point_title": point.title,
+            "category": point.category,
+            "lexicons": [lex.term for lex in point.lexicons],
+        }
+
+    @staticmethod
+    async def add_lexicons(
+        db: AsyncSession,
+        task_id: str,
+        chapter_num: int,
+        point_title: str,
+        category: str,
+        lexicons: List[str],
+    ) -> Dict[str, Any]:
+        """添加词库（去重）"""
+        result = await db.execute(
+            select(KnowledgePoint, Chapter)
+            .join(Chapter)
+            .join(Syllabus)
+            .where(
+                Syllabus.task_id == task_id,
+                Chapter.chapter_num == chapter_num,
+                KnowledgePoint.title == point_title,
+                KnowledgePoint.category == category,
+            )
+            .options(selectinload(KnowledgePoint.lexicons))
+        )
+        row = result.first()
+        if not row:
+            raise ValueError("知识点不存在")
+
+        point, chapter = row
+        existing = {lex.term for lex in point.lexicons}
+        new_terms = [term for term in lexicons if term not in existing]
+
+        if not new_terms:
+            raise ValueError("所有词库已存在")
+
+        for term in new_terms:
+            db.add(Lexicon(knowledge_point_id=point.id, term=term))
+
+        await db.commit()
+        await db.refresh(point)
+
+        return {
+            "task_id": task_id,
+            "chapter_num": chapter.chapter_num,
+            "chapter_title": chapter.chapter_title,
+            "point_title": point.title,
+            "category": point.category,
+            "lexicons": [lex.term for lex in point.lexicons],
+        }
+
+    @staticmethod
+    async def update_lexicons(
+        db: AsyncSession,
+        task_id: str,
+        chapter_num: int,
+        point_title: str,
+        category: str,
+        lexicons: List[str],
+    ) -> Dict[str, Any]:
+        """替换词库"""
+        result = await db.execute(
+            select(KnowledgePoint, Chapter)
+            .join(Chapter)
+            .join(Syllabus)
+            .where(
+                Syllabus.task_id == task_id,
+                Chapter.chapter_num == chapter_num,
+                KnowledgePoint.title == point_title,
+                KnowledgePoint.category == category,
+            )
+            .options(selectinload(KnowledgePoint.lexicons))
+        )
+        row = result.first()
+        if not row:
+            raise ValueError("知识点不存在")
+
+        point, chapter = row
+
+        # 删除现有词库
+        for lex in point.lexicons:
+            await db.delete(lex)
+
+        # 添加新词库
+        for term in lexicons:
+            db.add(Lexicon(knowledge_point_id=point.id, term=term))
+
+        await db.commit()
+        await db.refresh(point)
+
+        return {
+            "task_id": task_id,
+            "chapter_num": chapter.chapter_num,
+            "chapter_title": chapter.chapter_title,
+            "point_title": point.title,
+            "category": point.category,
+            "lexicons": [lex.term for lex in point.lexicons],
+        }
+
+    @staticmethod
+    async def delete_lexicons(
+        db: AsyncSession,
+        task_id: str,
+        chapter_num: int,
+        point_title: str,
+        category: str,
+        lexicons: List[str],
+    ) -> Dict[str, Any]:
+        """删除指定词库"""
+        result = await db.execute(
+            select(KnowledgePoint, Chapter)
+            .join(Chapter)
+            .join(Syllabus)
+            .where(
+                Syllabus.task_id == task_id,
+                Chapter.chapter_num == chapter_num,
+                KnowledgePoint.title == point_title,
+                KnowledgePoint.category == category,
+            )
+            .options(selectinload(KnowledgePoint.lexicons))
+        )
+        row = result.first()
+        if not row:
+            raise ValueError("知识点不存在")
+
+        point, chapter = row
+        terms_to_delete = set(lexicons)
+        deleted = []
+
+        for lex in point.lexicons:
+            if lex.term in terms_to_delete:
+                await db.delete(lex)
+                deleted.append(lex.term)
+
+        if not deleted:
+            raise ValueError("指定的词库不存在")
+
+        await db.commit()
+        await db.refresh(point)
+
+        return {
+            "task_id": task_id,
+            "chapter_num": chapter.chapter_num,
+            "chapter_title": chapter.chapter_title,
+            "point_title": point.title,
+            "category": point.category,
+            "lexicons": [lex.term for lex in point.lexicons],
+        }

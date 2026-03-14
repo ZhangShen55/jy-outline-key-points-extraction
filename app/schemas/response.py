@@ -76,6 +76,16 @@ class SystemStatusResponse(BaseModel):
     lesson: TaskTypeStats
 
 
+class LexiconResponse(BaseModel):
+    """词库响应"""
+    task_id: str
+    chapter_num: int
+    chapter_title: str
+    point_title: str
+    category: str
+    lexicons: List[str]
+
+
 class HealthResponse(BaseModel):
     """健康检查响应"""
 

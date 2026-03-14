@@ -26,3 +26,13 @@ class LessonAnalyzeRequest(BaseModel):
     syllabus_id: str = Field(..., description="大纲任务ID（从 /process 接口返回的 task_id）")
     # syllabus_result: Dict[str, Any] = Field(..., description="大纲提取结果（含 course + result 字段）")
     text_segments: List[Dict[str, Any]] = Field(..., description="语音转写段落列表 [{text, bg, ed}, ...]")
+
+
+class LexiconRequest(BaseModel):
+    """词库操作请求"""
+
+    task_id: str = Field(..., description="大纲任务ID")
+    chapter_num: int = Field(..., description="章节号")
+    point_title: str = Field(..., description="知识点标题")
+    category: str = Field(..., description="类别: basic/keypoints/difficulty/politics")
+    lexicons: List[str] = Field(..., description="词库列表")
