@@ -4,8 +4,6 @@ CREATE TABLE IF NOT EXISTS tasks (
     task_id VARCHAR(50) UNIQUE NOT NULL,
     task_type VARCHAR(20) NOT NULL,
     status SMALLINT NOT NULL DEFAULT 1,
-    stage VARCHAR(50),
-    progress SMALLINT DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
 
     filename VARCHAR(255),
     file_size INTEGER,
@@ -18,7 +16,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 
     error TEXT,
     result JSONB,
-    metadata JSONB,
+    extra_data JSONB,
 
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
