@@ -340,3 +340,37 @@ class SyllabusService:
             "category": point.category,
             "lexicons": [lex.term for lex in point.lexicons],
         }
+
+    @staticmethod
+    async def get_syllabus_full(
+        db: AsyncSession, task_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """从数据库重建完整大纲结构（含最新词库）"""
+        syllabus = await SyllabusService.get_syllabus_by_task_id(
+            db, task_id, with_relations=True
+        )
+        if not syllabus:
+            return None
+
+        chapters_sorted = sorted(syllabus.chapters, key=lambda c: c.chapter_num)
+        result = []
+
+        for chapter in chapters_sorted:
+            content_dict = {"basic": [], "keypoints": [], "difficulty": [], "politics": []}
+
+            for point in chapter.knowledge_points:
+                item = {
+                    "title": point.title,
+                    "summary": point.summary,
+                    "lexicon": [lex.term for lex in point.lexicons],
+                }
+                if point.category in content_dict:
+                    content_dict[point.category].append(item)
+
+            result.append({
+                "chapter": chapter.chapter_title,
+                "num": chapter.chapter_num,
+                "content": [content_dict],
+            })
+
+        return {"course": syllabus.course, "result": result}

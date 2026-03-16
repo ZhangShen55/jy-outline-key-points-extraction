@@ -1,7 +1,8 @@
 """
 词库管理端点
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, Query, Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -12,6 +13,18 @@ from app.services.db.syllabus_service import SyllabusService
 
 logger = get_logger(__name__)
 router = APIRouter()
+
+
+@router.get("/{task_id}", response_model=Dict[str, Any])
+async def get_syllabus_full(
+    task_id: str = Path(..., description="大纲任务ID"),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取完整大纲结构（含最新词库修改）"""
+    result = await SyllabusService.get_syllabus_full(db, task_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="大纲不存在")
+    return result
 
 
 @router.get("/lexicon", response_model=LexiconResponse)
