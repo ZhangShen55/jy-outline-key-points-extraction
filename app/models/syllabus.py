@@ -58,7 +58,7 @@ class Lexicon(Base):
     id = Column(Integer, primary_key=True, index=True)
     knowledge_point_id = Column(Integer, ForeignKey("knowledge_points.id", ondelete="CASCADE"), nullable=False, index=True)
     term = Column(String(200), nullable=False)
-    embedding = Column(Vector(384))
+    embedding = Column(Vector(1024))
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
     updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
 
