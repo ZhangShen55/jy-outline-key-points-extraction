@@ -168,24 +168,38 @@ class SyllabusService:
         point_title: str,
         category: str,
     ) -> Optional[Dict[str, Any]]:
-        """查询指定知识点的词库"""
-        result = await db.execute(
-            select(KnowledgePoint, Chapter)
-            .join(Chapter)
-            .join(Syllabus)
+        """查询指定知识点的词库（分步验证）"""
+        # 1. 验证task_id
+        syllabus_result = await db.execute(
+            select(Syllabus).where(Syllabus.task_id == task_id)
+        )
+        syllabus = syllabus_result.scalar_one_or_none()
+        if not syllabus:
+            raise ValueError(f"task_not_found:大纲任务 {task_id} 不存在")
+
+        # 2. 验证章节
+        chapter_result = await db.execute(
+            select(Chapter)
+            .where(Chapter.syllabus_id == syllabus.id, Chapter.chapter_num == chapter_num)
+        )
+        chapter = chapter_result.scalar_one_or_none()
+        if not chapter:
+            raise ValueError(f"chapter_not_found:章节 {chapter_num} 不存在")
+
+        # 3. 验证知识点
+        point_result = await db.execute(
+            select(KnowledgePoint)
             .where(
-                Syllabus.task_id == task_id,
-                Chapter.chapter_num == chapter_num,
+                KnowledgePoint.chapter_id == chapter.id,
                 KnowledgePoint.title == point_title,
                 KnowledgePoint.category == category,
             )
             .options(selectinload(KnowledgePoint.lexicons))
         )
-        row = result.first()
-        if not row:
-            return None
+        point = point_result.scalar_one_or_none()
+        if not point:
+            raise ValueError(f"point_not_found:知识点 '{point_title}' (类别:{category}) 不存在")
 
-        point, chapter = row
         return {
             "task_id": task_id,
             "chapter_num": chapter.chapter_num,
@@ -204,35 +218,63 @@ class SyllabusService:
         category: str,
         lexicons: List[str],
     ) -> Dict[str, Any]:
-        """添加词库（去重）"""
-        result = await db.execute(
-            select(KnowledgePoint, Chapter)
-            .join(Chapter)
-            .join(Syllabus)
+        """添加词库（去重、带验证、悲观锁）"""
+        # 1. 验证task_id是否存在
+        syllabus_result = await db.execute(
+            select(Syllabus).where(Syllabus.task_id == task_id)
+        )
+        syllabus = syllabus_result.scalar_one_or_none()
+        if not syllabus:
+            raise ValueError(f"task_not_found:大纲任务 {task_id} 不存在")
+
+        # 2. 验证章节是否存在
+        chapter_result = await db.execute(
+            select(Chapter)
+            .where(Chapter.syllabus_id == syllabus.id, Chapter.chapter_num == chapter_num)
+        )
+        chapter = chapter_result.scalar_one_or_none()
+        if not chapter:
+            raise ValueError(f"chapter_not_found:章节 {chapter_num} 不存在")
+
+        # 3. 验证知识点是否存在（使用悲观锁）
+        point_result = await db.execute(
+            select(KnowledgePoint)
             .where(
-                Syllabus.task_id == task_id,
-                Chapter.chapter_num == chapter_num,
+                KnowledgePoint.chapter_id == chapter.id,
                 KnowledgePoint.title == point_title,
                 KnowledgePoint.category == category,
             )
             .options(selectinload(KnowledgePoint.lexicons))
+            .with_for_update()  # 悲观锁
         )
-        row = result.first()
-        if not row:
-            raise ValueError("知识点不存在")
+        point = point_result.scalar_one_or_none()
+        if not point:
+            raise ValueError(f"point_not_found:知识点 '{point_title}' (类别:{category}) 不存在")
 
-        point, chapter = row
+        # 4. 检查数量限制
+        current_count = len(point.lexicons)
+        if current_count >= 50:
+            raise ValueError(f"lexicon_limit:词库数量已达上限(50个),请先删除部分词库再添加")
+
+        # 5. 去重并过滤
         existing = {lex.term for lex in point.lexicons}
         new_terms = [term for term in lexicons if term not in existing]
 
         if not new_terms:
-            raise ValueError("所有词库已存在")
+            raise ValueError("conflict:所有词库已存在")
 
-        for term in new_terms:
-            db.add(Lexicon(knowledge_point_id=point.id, term=term))
+        # 6. 检查添加后是否超限
+        if current_count + len(new_terms) > 25:
+            raise ValueError(f"lexicon_limit:添加后将超过上限，当前{current_count}个，最多还能添加{25-current_count}个")
+
+        # 7. 批量添加
+        new_lexicons = [Lexicon(knowledge_point_id=point.id, term=term) for term in new_terms]
+        db.add_all(new_lexicons)
 
         await db.commit()
         await db.refresh(point)
+
+        logger.info(f"添加词库成功: task_id={task_id}, chapter={chapter_num}, point={point_title}, added={len(new_terms)}")
 
         return {
             "task_id": task_id,
@@ -252,35 +294,57 @@ class SyllabusService:
         category: str,
         lexicons: List[str],
     ) -> Dict[str, Any]:
-        """替换词库"""
-        result = await db.execute(
-            select(KnowledgePoint, Chapter)
-            .join(Chapter)
-            .join(Syllabus)
+        """替换词库（带验证、悲观锁、事务安全）"""
+        # 1. 验证task_id
+        syllabus_result = await db.execute(
+            select(Syllabus).where(Syllabus.task_id == task_id)
+        )
+        syllabus = syllabus_result.scalar_one_or_none()
+        if not syllabus:
+            raise ValueError(f"task_not_found:大纲任务 {task_id} 不存在")
+
+        # 2. 验证章节
+        chapter_result = await db.execute(
+            select(Chapter)
+            .where(Chapter.syllabus_id == syllabus.id, Chapter.chapter_num == chapter_num)
+        )
+        chapter = chapter_result.scalar_one_or_none()
+        if not chapter:
+            raise ValueError(f"chapter_not_found:章节 {chapter_num} 不存在")
+
+        # 3. 验证知识点（悲观锁）
+        point_result = await db.execute(
+            select(KnowledgePoint)
             .where(
-                Syllabus.task_id == task_id,
-                Chapter.chapter_num == chapter_num,
+                KnowledgePoint.chapter_id == chapter.id,
                 KnowledgePoint.title == point_title,
                 KnowledgePoint.category == category,
             )
             .options(selectinload(KnowledgePoint.lexicons))
+            .with_for_update()
         )
-        row = result.first()
-        if not row:
-            raise ValueError("知识点不存在")
+        point = point_result.scalar_one_or_none()
+        if not point:
+            raise ValueError(f"point_not_found:知识点 '{point_title}' (类别:{category}) 不存在")
 
-        point, chapter = row
+        # 4. 检查数量限制
+        if len(lexicons) > 25:
+            raise ValueError(f"lexicon_limit:词库数量不能超过25个，当前提交{len(lexicons)}个")
 
-        # 删除现有词库
+        # 5. 先构建新对象（事务安全）
+        new_lexicons = [Lexicon(knowledge_point_id=point.id, term=term) for term in lexicons]
+
+        # 6. 删除旧词库
         for lex in point.lexicons:
             await db.delete(lex)
 
-        # 添加新词库
-        for term in lexicons:
-            db.add(Lexicon(knowledge_point_id=point.id, term=term))
+        # 7. 添加新词库
+        db.add_all(new_lexicons)
 
         await db.commit()
         await db.refresh(point)
+
+        logger.info(f"更新词库成功: task_id={task_id}, chapter={chapter_num}, point={point_title}, count={len(lexicons)}")
 
         return {
             "task_id": task_id,
@@ -300,24 +364,40 @@ class SyllabusService:
         category: str,
         lexicons: List[str],
     ) -> Dict[str, Any]:
-        """删除指定词库"""
-        result = await db.execute(
-            select(KnowledgePoint, Chapter)
-            .join(Chapter)
-            .join(Syllabus)
+        """删除指定词库（带验证、悲观锁）"""
+        # 1. 验证task_id
+        syllabus_result = await db.execute(
+            select(Syllabus).where(Syllabus.task_id == task_id)
+        )
+        syllabus = syllabus_result.scalar_one_or_none()
+        if not syllabus:
+            raise ValueError(f"task_not_found:大纲任务 {task_id} 不存在")
+
+        # 2. 验证章节
+        chapter_result = await db.execute(
+            select(Chapter)
+            .where(Chapter.syllabus_id == syllabus.id, Chapter.chapter_num == chapter_num)
+        )
+        chapter = chapter_result.scalar_one_or_none()
+        if not chapter:
+            raise ValueError(f"chapter_not_found:章节 {chapter_num} 不存在")
+
+        # 3. 验证知识点（悲观锁）
+        point_result = await db.execute(
+            select(KnowledgePoint)
             .where(
-                Syllabus.task_id == task_id,
-                Chapter.chapter_num == chapter_num,
+                KnowledgePoint.chapter_id == chapter.id,
                 KnowledgePoint.title == point_title,
                 KnowledgePoint.category == category,
             )
             .options(selectinload(KnowledgePoint.lexicons))
+            .with_for_update()
         )
-        row = result.first()
-        if not row:
-            raise ValueError("知识点不存在")
+        point = point_result.scalar_one_or_none()
+        if not point:
+            raise ValueError(f"point_not_found:知识点 '{point_title}' (类别:{category}) 不存在")
 
-        point, chapter = row
+        # 4. 删除指定词库
         terms_to_delete = set(lexicons)
         deleted = []
 
@@ -327,10 +407,12 @@ class SyllabusService:
                 deleted.append(lex.term)
 
         if not deleted:
-            raise ValueError("指定的词库不存在")
+            raise ValueError(f"lexicon_not_found:指定的词库不存在")
 
         await db.commit()
         await db.refresh(point)
+
+        logger.info(f"删除词库成功: task_id={task_id}, chapter={chapter_num}, point={point_title}, deleted={len(deleted)}")
 
         return {
             "task_id": task_id,
