@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS lexicons (
     id SERIAL PRIMARY KEY,
     knowledge_point_id INTEGER NOT NULL REFERENCES knowledge_points(id) ON DELETE CASCADE,
     term VARCHAR(200) NOT NULL,
-    embedding vector(384),
+    embedding vector(1024),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
