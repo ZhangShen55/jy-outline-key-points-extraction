@@ -3,8 +3,6 @@ name = "教学大纲四要点核心内容提取系统"
 version = "1.0.0"
 debug = true
 
-# LLM 配置已迁移至 .env 文件
-
 [chunking]
 chunk_size = 10000
 overlap = 1000
@@ -27,3 +25,19 @@ name = "syllabus_db"
 level = "INFO"
 format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 file = ""
+
+[embedding]
+model = "BAAI/bge-large-zh-v1.5"
+base_url = "https://api.siliconflow.cn/v1"
+dimension = 1024
+batch_size = 32
+
+[rerank]
+enabled = true
+model = "BAAI/bge-reranker-v2-m3"
+base_url = "https://api.siliconflow.cn/v1"
+threshold_for_rerank = 50
+
+[lexicon_match]
+default_min_score = 0.5
+max_top = 20
