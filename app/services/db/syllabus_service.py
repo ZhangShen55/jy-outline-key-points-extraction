@@ -136,15 +136,21 @@ class SyllabusService:
                         if not isinstance(lexicon_list, list):
                             lexicon_list = []
 
-                        for term in lexicon_list:
-                            if not term or not isinstance(term, str):
-                                continue
-                            lexicon = Lexicon(
-                                knowledge_point_id=kp.id,
-                                term=term,
-                                embedding=None,
-                            )
-                            db.add(lexicon)
+                        # 收集有效词库项，稍后批量生成 embedding
+                        valid_terms = [t for t in lexicon_list if t and isinstance(t, str)]
+                        if valid_terms:
+                            try:
+                                embeddings = await batch_generate_embeddings(valid_terms)
+                            except Exception as emb_err:
+                                logger.warning(f"章节 {chapter_title} 生成 embedding 失败: {emb_err}")
+                                embeddings = [None] * len(valid_terms)
+
+                            for term, emb in zip(valid_terms, embeddings):
+                                db.add(Lexicon(
+                                    knowledge_point_id=kp.id,
+                                    term=term,
+                                    embedding=emb,
+                                ))
             except Exception as e:
                 import logging
                 logging.error(f"处理第 {idx+1} 章节时出错: {chapter_title}, 错误: {e}")
