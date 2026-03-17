@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.syllabus import Syllabus, Chapter, KnowledgePoint, Lexicon
 from app.core.logging_config import get_logger
+from app.services.embedding_service import batch_generate_embeddings
 
 logger = get_logger(__name__)
 
@@ -267,8 +268,17 @@ class SyllabusService:
         if current_count + len(new_terms) > 25:
             raise ValueError(f"lexicon_limit:添加后将超过上限，当前{current_count}个，最多还能添加{25-current_count}个")
 
-        # 7. 批量添加
-        new_lexicons = [Lexicon(knowledge_point_id=point.id, term=term) for term in new_terms]
+        # 7. 批量生成 embedding 并添加
+        try:
+            embeddings = await batch_generate_embeddings(new_terms)
+        except Exception as e:
+            logger.warning(f"生成 embedding 失败，词库仍会添加: {e}")
+            embeddings = [None] * len(new_terms)
+
+        new_lexicons = [
+            Lexicon(knowledge_point_id=point.id, term=term, embedding=emb)
+            for term, emb in zip(new_terms, embeddings)
+        ]
         db.add_all(new_lexicons)
 
         await db.commit()
@@ -331,8 +341,17 @@ class SyllabusService:
         if len(lexicons) > 25:
             raise ValueError(f"lexicon_limit:词库数量不能超过25个，当前提交{len(lexicons)}个")
 
-        # 5. 先构建新对象（事务安全）
-        new_lexicons = [Lexicon(knowledge_point_id=point.id, term=term) for term in lexicons]
+        # 5. 批量生成 embedding 并构建新对象（事务安全）
+        try:
+            embeddings = await batch_generate_embeddings(lexicons)
+        except Exception as e:
+            logger.warning(f"生成 embedding 失败，词库仍会更新: {e}")
+            embeddings = [None] * len(lexicons)
+
+        new_lexicons = [
+            Lexicon(knowledge_point_id=point.id, term=term, embedding=emb)
+            for term, emb in zip(lexicons, embeddings)
+        ]
 
         # 6. 删除旧词库
         for lex in point.lexicons:

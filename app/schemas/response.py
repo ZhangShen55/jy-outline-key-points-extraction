@@ -86,6 +86,33 @@ class LexiconResponse(BaseModel):
     lexicons: List[str]
 
 
+class LexiconMatchSource(BaseModel):
+    """匹配结果来源"""
+    task_id: str
+    chapter_num: int
+    chapter_title: str
+    category: str
+    point_title: str
+
+
+class LexiconMatchItem(BaseModel):
+    """单条匹配结果"""
+    course: str
+    lexicon: str
+    score: float
+    source: LexiconMatchSource
+
+
+class LexiconMatchResponse(BaseModel):
+    """词库匹配响应"""
+    text: str
+    top: int
+    search_scope: Dict[str, Any]
+    status_code: int
+    message: str
+    results: List[LexiconMatchItem]
+
+
 class HealthResponse(BaseModel):
     """健康检查响应"""
 

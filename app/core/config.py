@@ -61,6 +61,24 @@ class Settings(BaseSettings):
     # GPU 配置
     CUDA_VISIBLE_DEVICES: str = "1"
 
+    # Embedding 配置
+    EMBEDDING_API_KEY: str = ""
+    EMBEDDING_MODEL: str = _toml.get("embedding", {}).get("model", "BAAI/bge-large-zh-v1.5")
+    EMBEDDING_BASE_URL: str = _toml.get("embedding", {}).get("base_url", "https://api.siliconflow.cn/v1")
+    EMBEDDING_DIMENSION: int = _toml.get("embedding", {}).get("dimension", 1024)
+    EMBEDDING_BATCH_SIZE: int = _toml.get("embedding", {}).get("batch_size", 32)
+
+    # Rerank 配置
+    RERANK_API_KEY: str = ""
+    RERANK_ENABLED: bool = _toml.get("rerank", {}).get("enabled", True)
+    RERANK_MODEL: str = _toml.get("rerank", {}).get("model", "BAAI/bge-reranker-v2-m3")
+    RERANK_BASE_URL: str = _toml.get("rerank", {}).get("base_url", "https://api.siliconflow.cn/v1")
+    RERANK_THRESHOLD: int = _toml.get("rerank", {}).get("threshold_for_rerank", 50)
+
+    # 词库匹配配置
+    MATCH_DEFAULT_MIN_SCORE: float = _toml.get("lexicon_match", {}).get("default_min_score", 0.5)
+    MATCH_MAX_TOP: int = _toml.get("lexicon_match", {}).get("max_top", 20)
+
     class Config:
         env_file = ".env"
         extra = "ignore"

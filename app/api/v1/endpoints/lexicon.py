@@ -8,9 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.logging_config import get_logger
 from app.core.validators import validate_category, validate_lexicons
-from app.schemas.request import LexiconRequest
-from app.schemas.response import LexiconResponse
+from app.schemas.request import LexiconRequest, LexiconMatchRequest
+from app.schemas.response import LexiconResponse, LexiconMatchResponse
 from app.services.db.syllabus_service import SyllabusService
+from app.services import lexicon_match_service
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -176,4 +177,29 @@ async def delete_lexicons(
         raise HTTPException(status_code=status_code, detail=detail)
     except Exception as e:
         logger.error(f"删除词库失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="服务器内部错误")
+
+
+@router.post("/match", response_model=LexiconMatchResponse)
+async def match_lexicons(
+    request: LexiconMatchRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """词库语义匹配（Embedding + Rerank）"""
+    try:
+        result = await lexicon_match_service.match_lexicons(
+            db=db,
+            query_text=request.text,
+            task_id=request.task_id,
+            chapter_num=request.chapter_num,
+            category=request.category,
+            point_title=request.point_title,
+            top=request.top,
+            min_score=request.min_score,
+        )
+        return LexiconMatchResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"词库匹配失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="服务器内部错误")

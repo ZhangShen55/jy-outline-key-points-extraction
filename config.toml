@@ -35,7 +35,8 @@ batch_size = 32
 [rerank]
 enabled = true
 model = "BAAI/bge-reranker-v2-m3"
-base_url = "https://api.siliconflow.cn/v1"
+#base_url = "https://api.siliconflow.cn/v1"
+base_url = "http://10.80.5.25:3000/v1"
 threshold_for_rerank = 50
 
 [lexicon_match]

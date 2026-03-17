@@ -1,7 +1,7 @@
 """
 请求模型
 """
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -36,3 +36,15 @@ class LexiconRequest(BaseModel):
     point_title: str = Field(..., description="知识点标题")
     category: str = Field(..., description="类别: basic/keypoints/difficulty/politics")
     lexicons: List[str] = Field(..., description="词库列表")
+
+
+class LexiconMatchRequest(BaseModel):
+    """词库语义匹配请求"""
+
+    text: str = Field(..., min_length=1, max_length=500, description="要匹配的文本")
+    task_id: Optional[str] = Field(None, description="大纲任务ID（1级范围）")
+    chapter_num: Optional[int] = Field(None, description="章节号（2级范围）")
+    category: Optional[str] = Field(None, description="类别（3级范围）")
+    point_title: Optional[str] = Field(None, description="知识点标题（4级范围）")
+    top: int = Field(1, ge=1, le=20, description="返回结果数量")
+    min_score: Optional[float] = Field(None, ge=0, le=1, description="最低置信度，不传则使用默认值")
