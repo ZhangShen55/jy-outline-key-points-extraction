@@ -27,12 +27,12 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     DEBUG: bool = _toml.get("project", {}).get("debug", False)
 
-    # LLM 配置（从 .env 读取）
-    LLM_MODEL: str = "doubao-seed-2-0-pro-260215"
+    # LLM 配置（密钥从 .env，其他从 config.toml）
+    LLM_MODEL: str = _toml.get("llm", {}).get("model", "doubao-seed-2-0-pro-260215")
     LLM_API_KEY: str = ""
-    LLM_BASE_URL: str = ""
-    LLM_MAX_TOKENS: int = 8192
-    LLM_TEMPERATURE: float = 0.0
+    LLM_BASE_URL: str = _toml.get("llm", {}).get("base_url", "")
+    LLM_MAX_TOKENS: int = _toml.get("llm", {}).get("max_tokens", 8192)
+    LLM_TEMPERATURE: float = _toml.get("llm", {}).get("temperature", 0.0)
 
     # Dolphin OCR 模型路径
     PARSER_MODEL_PATH: str = ""

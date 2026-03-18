@@ -3,6 +3,12 @@ name = "教学大纲四要点核心内容提取系统"
 version = "1.0.0"
 debug = true
 
+[llm]
+model = "doubao-seed-2-0-mini-260215"
+base_url = "https://ark.cn-beijing.volces.com/api/v3"
+max_tokens = 8192
+temperature = 0
+
 [chunking]
 chunk_size = 10000
 overlap = 1000
