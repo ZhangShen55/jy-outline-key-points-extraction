@@ -22,7 +22,7 @@ async def rerank(
     """
     settings = get_settings()
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=300.0) as client:
         response = await client.post(
             f"{settings.RERANK_BASE_URL}/rerank",
             json={
