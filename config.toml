@@ -10,9 +10,9 @@ batch_size = 100
 
 [concurrency]
 # 同时处理的最大文档数
-max_concurrent = 10
+max_concurrent = 50
 # 等待队列上限，超出后返回 429
-max_queue = 10
+max_queue = 1000
 
 [database]
 host = "localhost"
