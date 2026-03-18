@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     DB_USER: str = _toml.get("database", {}).get("user", "postgres")
     DB_PASSWORD: str = _toml.get("database", {}).get("password", "")
     DB_NAME: str = _toml.get("database", {}).get("name", "syllabus_db")
+    DB_POOL_SIZE: int = _toml.get("database", {}).get("pool_size", 100)
+    DB_MAX_OVERFLOW: int = _toml.get("database", {}).get("max_overflow", 50)
+    DB_POOL_TIMEOUT: int = _toml.get("database", {}).get("pool_timeout", 30)
 
     # 日志配置
     LOG_LEVEL: str = _toml.get("logging", {}).get("level", "INFO")

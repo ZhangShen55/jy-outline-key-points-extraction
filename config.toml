@@ -20,6 +20,9 @@ port = 54320
 user = "postgres"
 password = "Hz_edu123#"
 name = "syllabus_db"
+pool_size = 100
+max_overflow = 50
+pool_timeout = 30
 
 [logging]
 level = "INFO"
