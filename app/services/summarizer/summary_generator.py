@@ -1,7 +1,7 @@
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from app.services.models.call_llm import call_llm, extract_json_from_text
-from app.prompts.dagang import SYSTEM_PROMPT_req, SYSTEM_PROMPT_imp, SYSTEM_PROMPT_diffi, SYSTEM_PROMPT_poli
+from app.prompts.syllabus import SYSTEM_PROMPT_req, SYSTEM_PROMPT_imp, SYSTEM_PROMPT_diffi, SYSTEM_PROMPT_poli
 from app.core.config import get_llm_config
 from app.core.logging_config import get_logger
 logger = get_logger(__name__)
