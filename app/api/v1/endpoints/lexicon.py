@@ -183,12 +183,10 @@ async def delete_lexicons(
 @router.post("/match", response_model=LexiconMatchResponse)
 async def match_lexicons(
     request: LexiconMatchRequest,
-    db: AsyncSession = Depends(get_db),
 ):
     """词库语义匹配（Embedding + Rerank）"""
     try:
         result = await lexicon_match_service.match_lexicons(
-            db=db,
             query_text=request.text,
             task_id=request.task_id,
             chapter_num=request.chapter_num,

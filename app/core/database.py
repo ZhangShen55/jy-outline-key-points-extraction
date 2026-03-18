@@ -18,7 +18,14 @@ ASYNC_DATABASE_URL = f"postgresql+asyncpg://{settings.DB_USER}:{settings.DB_PASS
 engine = create_engine(DATABASE_URL, echo=False)
 
 # 异步引擎（用于应用运行时）
-async_engine = create_async_engine(ASYNC_DATABASE_URL, echo=False, pool_pre_ping=True)
+async_engine = create_async_engine(
+    ASYNC_DATABASE_URL,
+    echo=False,
+    pool_pre_ping=True,
+    pool_size=100,
+    max_overflow=50,
+    pool_timeout=30,
+)
 
 # 会话工厂
 AsyncSessionLocal = async_sessionmaker(

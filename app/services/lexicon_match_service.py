@@ -1,6 +1,7 @@
 """
 词库语义匹配服务
 Embedding 向量召回 + Rerank 精排
+数据库连接在查询完成后立即释放，不在外部API调用期间占用
 """
 from typing import Optional, List, Dict, Any
 from sqlalchemy import select, text
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.syllabus import Syllabus, Chapter, KnowledgePoint, Lexicon
 from app.core.config import get_settings
+from app.core.database import AsyncSessionLocal
 from app.core.logging_config import get_logger
 from app.core.validators import VALID_CATEGORIES
 from app.services.embedding_service import generate_embedding
@@ -97,7 +99,6 @@ def _build_where_clause(
 
 
 async def match_lexicons(
-    db: AsyncSession,
     query_text: str,
     task_id: Optional[str] = None,
     chapter_num: Optional[int] = None,
@@ -106,55 +107,61 @@ async def match_lexicons(
     top: int = 1,
     min_score: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """词库语义匹配：向量召回 + 动态 rerank"""
+    """
+    词库语义匹配：向量召回 + 动态 rerank
+    自行管理数据库会话，查完即释放，不在外部API调用期间占用连接
+    """
     settings = get_settings()
     if min_score is None:
         min_score = settings.MATCH_DEFAULT_MIN_SCORE
 
-    # 1. 验证搜索范围
-    scope = await _validate_scope(db, task_id, chapter_num, category, point_title)
+    # ===== 阶段1: 数据库操作（用完即释放连接）=====
+    async with AsyncSessionLocal() as db:
+        # 1. 验证搜索范围
+        scope = await _validate_scope(db, task_id, chapter_num, category, point_title)
 
-    # 2. 生成查询向量
-    query_embedding = await generate_embedding(query_text)
-    embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+        # 2. 生成查询向量
+        query_embedding = await generate_embedding(query_text)
+        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
-    # 3. pgvector 向量搜索
-    where_clause = _build_where_clause(task_id, chapter_num, category, point_title)
-    recall_limit = max(top * 10, 100) if settings.RERANK_ENABLED else top
+        # 3. pgvector 向量搜索
+        where_clause = _build_where_clause(task_id, chapter_num, category, point_title)
+        recall_limit = max(top * 10, 100) if settings.RERANK_ENABLED else top
 
-    sql = f"""
-        SELECT
-            l.id, l.term,
-            1 - (l.embedding <=> :embedding) AS cosine_score,
-            kp.title AS point_title, kp.category,
-            c.chapter_num, c.chapter_title,
-            s.task_id, s.course
-        FROM lexicons l
-        JOIN knowledge_points kp ON l.knowledge_point_id = kp.id
-        JOIN chapters c ON kp.chapter_id = c.id
-        JOIN syllabuses s ON c.syllabus_id = s.id
-        WHERE {where_clause}
-        ORDER BY l.embedding <=> :embedding
-        LIMIT :recall_limit
-    """
+        sql = f"""
+            SELECT
+                l.id, l.term,
+                1 - (l.embedding <=> :embedding) AS cosine_score,
+                kp.title AS point_title, kp.category,
+                c.chapter_num, c.chapter_title,
+                s.task_id, s.course
+            FROM lexicons l
+            JOIN knowledge_points kp ON l.knowledge_point_id = kp.id
+            JOIN chapters c ON kp.chapter_id = c.id
+            JOIN syllabuses s ON c.syllabus_id = s.id
+            WHERE {where_clause}
+            ORDER BY l.embedding <=> :embedding
+            LIMIT :recall_limit
+        """
 
-    params = {"embedding": embedding_str, "recall_limit": recall_limit}
-    if task_id:
-        params["task_id"] = task_id
-    if chapter_num is not None:
-        params["chapter_num"] = chapter_num
-    if category:
-        params["category"] = category
-    if point_title:
-        params["point_title"] = point_title
+        params = {"embedding": embedding_str, "recall_limit": recall_limit}
+        if task_id:
+            params["task_id"] = task_id
+        if chapter_num is not None:
+            params["chapter_num"] = chapter_num
+        if category:
+            params["category"] = category
+        if point_title:
+            params["point_title"] = point_title
 
-    result = await db.execute(text(sql), params)
-    candidates = result.fetchall() # 全部结果
+        result = await db.execute(text(sql), params)
+        candidates = [dict(row._mapping) for row in result.fetchall()]
+    # ===== 数据库连接已被释放 =====
 
     if not candidates:
         return _empty_response(query_text, top, scope)
 
-    # 4. 动态 rerank
+    # ===== 阶段2: 外部API调用（数据库已释放）=====
     use_rerank = (
         settings.RERANK_ENABLED and len(candidates) > settings.RERANK_THRESHOLD
     )
@@ -163,14 +170,14 @@ async def match_lexicons(
         scored = await _do_rerank(query_text, candidates, top)
     else:
         scored = [
-            _candidate_to_dict(c, round(float(c.cosine_score), 6))
+            _candidate_to_dict(c, round(float(c["cosine_score"]), 6))
             for c in candidates[:top]
         ]
 
-    # 5. 过滤低于阈值
+    # 过滤低于阈值
     filtered = [s for s in scored if s["score"] >= min_score][:top]
 
-    # 6. 构建响应
+    # 构建响应
     results = [
         {
             "course": item["course"],
@@ -206,7 +213,7 @@ async def match_lexicons(
 
 async def _do_rerank(query_text, candidates, top):
     """Rerank 精排"""
-    documents = [c.term for c in candidates]
+    documents = [c["term"] for c in candidates]
     rerank_results = await rerank_service.rerank(
         query=query_text, documents=documents, top_n=top,
     )
@@ -221,13 +228,13 @@ async def _do_rerank(query_text, candidates, top):
 def _candidate_to_dict(c, score):
     return {
         "score": score,
-        "term": c.term,
-        "course": c.course,
-        "task_id": c.task_id,
-        "chapter_num": c.chapter_num,
-        "chapter_title": c.chapter_title,
-        "category": c.category,
-        "point_title": c.point_title,
+        "term": c["term"],
+        "course": c["course"],
+        "task_id": c["task_id"],
+        "chapter_num": c["chapter_num"],
+        "chapter_title": c["chapter_title"],
+        "category": c["category"],
+        "point_title": c["point_title"],
     }
 
 
