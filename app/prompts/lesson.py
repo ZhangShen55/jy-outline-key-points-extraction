@@ -39,8 +39,6 @@ SEGMENT_MATCH_USER_TEMPLATE = """你是一位{course}课程教学分析专家。
 
 【段落信息】
 seg_id: {seg_id}
-bg: {bg}
-ed: {ed}
 文本内容：
 {full_text}
 
@@ -53,7 +51,7 @@ ed: {ed}
 3. 如果没有任何知识点与该段文本匹配，返回 null
 
 匹配时严格返回如下 JSON（单行）：
-{{"category":"<basic/keypoints/difficulty/politics>","title":"<知识点标题>","matched_lexicon":["<命中的关键词1>", "<命中的关键词2>"],"matched_segments":[{{"seg_id":"{seg_id}","text_snippet":"<文本内容中与知识点相关最关键的一句话>","match_level":"<优秀/深度/常规/浅层>","reason":"<匹配理由>"}}]}}
+{{"category":"<basic/keypoints/difficulty/politics>","title":"<知识点标题>","matched_lexicon":["<命中的关键词1>", "<命中的关键词2>"],"matched_segments":[{{"seg_id":"{seg_id}","text_snippet":"<文本内容中与知识点相关最关键的一句话>","match_level":"<优秀/深度/常规/浅层>","reason":"<匹配理由,结合文本内容和知识点简要说明，不允许出现lexicon词库等字眼>"}}]}}
 
 不匹配时返回：{{"no_match": true}}
 

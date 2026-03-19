@@ -43,6 +43,7 @@ def merge_text_segments(raw_segments: List[dict], target_chars: int = 200) -> Li
     两步合并：
     1. 按句末标点（。！？）合并短句 → 句子
     2. 累积到 ~target_chars 字切段
+    时间字段仅用于结果输出，不参与 LLM 判断。
     """
     # Step 1: 按句末标点合并短句
     sentences = []
@@ -55,8 +56,8 @@ def merge_text_segments(raw_segments: List[dict], target_chars: int = 200) -> Li
         if not text:
             continue
         if buf_bg is None:
-            buf_bg = seg["bg"]
-        buf_ed = seg["ed"]
+            buf_bg = seg.get("bg")
+        buf_ed = seg.get("ed")
         buf_text += text
 
         if re.search(r"[。！？!?]$", text):
@@ -228,6 +229,7 @@ def _extract_points_from_chapters(
     for ch in syllabus_result.get("result", []):
         if ch.get("chapter", "") not in matched_titles:
             continue
+        chapter_num = ch.get("num", 0)
         content = _flatten_content(ch.get("content", {}))
         cat_map = {
             "basic": "basic",
@@ -243,6 +245,7 @@ def _extract_points_from_chapters(
                     "category": cat,
                     "title": item.get("title", ""),
                     "lexicon": item.get("lexicon", []),
+                    "chapter_num": chapter_num,
                 })
 
     return points
@@ -290,8 +293,6 @@ async def _match_one_segment(
         user_prompt = SEGMENT_MATCH_USER_TEMPLATE.format(
             course=course,
             seg_id=seg["seg_id"],
-            bg=seg["bg"],
-            ed=seg["ed"],
             full_text=seg["text"],
             points_json=json.dumps(points, ensure_ascii=False),
         )
@@ -322,8 +323,8 @@ async def _match_one_segment(
         # 代码侧补入原始字段，避免 LLM 篡改
         for ms in data.get("matched_segments", []):
             ms["full_text"] = seg["text"]
-            ms["bg"] = seg["bg"]
-            ms["ed"] = seg["ed"]
+            ms["bg"] = seg.get("bg")
+            ms["ed"] = seg.get("ed")
             # 将 LLM 返回的 snippet 对齐到 full_text 中的原始完整句子
             if ms.get("text_snippet"):
                 ms["text_snippet"] = _realign_snippet(ms["text_snippet"], seg["text"])
@@ -379,6 +380,11 @@ def _compute_coverage(
         cat_totals[cat] = cat_totals.get(cat, 0) + 1
         cat_matched.setdefault(cat, set())
 
+    # (category, title) → chapter_num 查找表
+    point_chapter_map = {
+        (p["category"], p["title"]): p.get("chapter_num", 0) for p in points
+    }
+
     matched_point_keys: set = set()
     matched_seg_ids: set = set()
 
@@ -386,8 +392,10 @@ def _compute_coverage(
     for m in matches:
         if m is None:
             continue
-        valid_matches.append(m)
         key = (m.get("category", ""), m.get("title", ""))
+        # 注入 chapter_num
+        m["chapter_num"] = point_chapter_map.get(key, 0)
+        valid_matches.append(m)
         matched_point_keys.add(key)
         cat = m.get("category", "")
         if cat in cat_matched:
@@ -448,6 +456,7 @@ def _build_unmatched_points(matches: List[Optional[dict]], points: List[dict]) -
         key = (p["category"], p["title"])
         if key not in matched_keys:
             unmatched.append({
+                "chapter_num": p.get("chapter_num", 0),
                 "category": p["category"],
                 "title": p["title"],
                 "reason": "课堂未涉及该知识点相关内容",

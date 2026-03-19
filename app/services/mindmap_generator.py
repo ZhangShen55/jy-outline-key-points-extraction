@@ -29,14 +29,11 @@ logger = get_logger(__name__)
 
 class TextSegment(BaseModel):
     text: str
-    bg: float
-    ed: float
 
 
 class Node(BaseModel):
     id: str
     label: str
-    time: str
     children: Optional[List[Any]] = None
 
 
@@ -47,11 +44,9 @@ class SegmentResult(BaseModel):
 
     @validator("document_skims", pre=True)
     def _normalize_skims(cls, v):
-        # LLM 有时返回列表 [{time, overview, content}]，取第一个元素
         if isinstance(v, list) and len(v) > 0:
             v = v[0]
         assert isinstance(v, dict), "document_skims 应为 dict"
-        assert re.match(r"^\d+-\d+$", v.get("time", "")), "document_skims.time 格式非法"
         return v
 
 
@@ -75,84 +70,10 @@ def split_into_4_parts(lst: list) -> list:
 
 def build_user_prompt(idx: int, segs: List[TextSegment]) -> str:
     node_id = idx + 1
-    start = int(float(segs[0].bg))
-    end = int(float(segs[-1].ed))
-    header = f"课程总的开始时间（秒):{start},结束时间（秒):{end},node_id:{node_id}"
-    lines = [f"{int(float(s.bg))}-{int(float(s.ed))}:{s.text}" for s in segs]
+    header = f"node_id:{node_id}"
+    lines = [s.text for s in segs]
     hints = '（请不要把 label 写成\u201c子主题/孙主题\u201d等占位词，必须是实际主题名称）'
     return header + "\n" + "\n".join(lines) + "\n" + hints
-
-
-def _parse_time(t: str) -> Tuple[int, int]:
-    parts = t.split("-")
-    return int(parts[0]), int(parts[1])
-
-
-def normalize_node_times(
-    seg_dict: dict,
-    depth_min: int = 2,
-    clamp_to_parent: bool = True,
-    clamp_depth_min: int = 1,
-    resort_siblings: bool = False,
-    fix_third_grandchild: bool = True,
-) -> dict:
-    """修正 LLM 生成的节点时间区间异常。"""
-    import copy
-    seg_dict = copy.deepcopy(seg_dict)
-
-    def fix_node(node: dict, parent_start: int = None, parent_end: int = None, depth: int = 0):
-        t = node.get("time", "0-0")
-        try:
-            s, e = _parse_time(t)
-        except Exception:
-            s, e = 0, 0
-
-        # 反转修复
-        if depth >= depth_min and e < s:
-            s, e = e, s
-
-        # 夹到父区间
-        if clamp_to_parent and depth >= clamp_depth_min and parent_start is not None:
-            if s < parent_start:
-                s = parent_start
-            if e > parent_end:
-                e = parent_end
-            # 完全落在父区间外 → 折叠到最近边界
-            if s >= parent_end:
-                s = parent_end - 1
-                e = parent_end
-            if e <= parent_start:
-                s = parent_start
-                e = parent_start + 1
-
-        node["time"] = f"{s}-{e}"
-
-        children = node.get("children")
-        if not children:
-            return node
-
-        # 修复第3孙节点零时长
-        if fix_third_grandchild and depth == 1 and len(children) >= 3:
-            for child in children:
-                grandchildren = child.get("children", [])
-                if len(grandchildren) >= 3:
-                    gs, ge = _parse_time(grandchildren[-1].get("time", "0-0"))
-                    if gs == ge:
-                        prev_s, prev_e = _parse_time(grandchildren[-2].get("time", "0-0"))
-                        mid = (prev_s + prev_e) // 2
-                        grandchildren[-2]["time"] = f"{prev_s}-{mid}"
-                        grandchildren[-1]["time"] = f"{mid}-{prev_e}"
-
-        for child in children:
-            fix_node(child, s, e, depth + 1)
-
-        return node
-
-    nodes = seg_dict.get("nodes", {})
-    if nodes:
-        fix_node(nodes, depth=0)
-
-    return seg_dict
 
 
 def guard(seg_dict: dict) -> bool:
@@ -166,16 +87,11 @@ def guard(seg_dict: dict) -> bool:
         assert isinstance(kp, str) and 4 <= len(kp) <= 120
 
         ds = seg_dict["document_skims"]
-        assert re.match(r"^\d+-\d+$", ds.get("time", ""))
-        ds_s, ds_e = _parse_time(ds["time"])
-        assert ds_s <= ds_e
         assert ds.get("overview") and ds.get("content")
 
         def check_node(node: dict, depth: int = 0):
             assert node.get("id"), f"节点 id 为空 depth={depth}"
             assert node.get("label"), f"节点 label 为空 depth={depth}"
-            t = node.get("time", "")
-            assert re.match(r"^\d+-\d+$", t), f"节点 time 格式非法: {t}"
             if depth >= 1:
                 assert not re.search(r"(子主题|孙主题)", node["label"]), "label 含占位词"
             children = node.get("children")
@@ -185,10 +101,6 @@ def guard(seg_dict: dict) -> bool:
                     check_node(c, depth + 1)
 
         check_node(seg_dict["nodes"])
-
-        # nodes.time 必须覆盖 document_skims.time
-        ns, ne = _parse_time(seg_dict["nodes"]["time"])
-        assert ns <= ds_s and ne >= ds_e
 
         return True
     except AssertionError as e:
@@ -291,16 +203,14 @@ async def _call_one_attempt(
 
     try:
         data = json.loads(json_repair.repair_json(content))
-        # LLM 有时返回 document_skims 为列表，统一转为 dict
         ds = data.get("document_skims")
         if isinstance(ds, list) and len(ds) > 0:
             data["document_skims"] = ds[0]
         seg = SegmentResult(**data)
-        seg_dict = normalize_node_times(data)
-        if not guard(seg_dict):
+        if not guard(data):
             logger.warning("guard 校验未通过，将重试")
             return None, usage
-        return SegmentResult(**seg_dict), usage
+        return seg, usage
     except Exception as e:
         logger.warning(f"单段处理失败: {e}")
         return None, usage
@@ -401,21 +311,15 @@ async def generate_course_mindmap(
     settings = get_settings()
     _model = model or settings.LLM_MODEL
 
-    segs = [TextSegment(**s) for s in segments]
+    segs = [TextSegment(**{k: v for k, v in s.items() if k == "text"}) for s in segments]
     parts = split_into_4_parts(segs)
-
-    course_start = int(float(segs[0].bg))
-    course_end = int(float(segs[-1].ed))
 
     seg_results, seg_usages = await run_until_all_pass(parts, _model, concurrency, max_rounds)
 
     key_points = [s.key_points for s in seg_results]
     summary_result, summary_usage = await call_summary_ex(key_points, _model)
 
-    document_skims = sorted(
-        [s.document_skims for s in seg_results],
-        key=lambda x: int(x["time"].split("-")[0])
-    )
+    document_skims = [s.document_skims for s in seg_results]
     nodes = [s.nodes.model_dump() for s in seg_results]
 
     result = {
@@ -424,7 +328,6 @@ async def generate_course_mindmap(
         "document_skims": document_skims,
         "mindmap": {
             "overall_label": summary_result["overall_label"],
-            "total_time": f"{course_start}-{course_end}",
             "nodes": nodes,
         },
     }
