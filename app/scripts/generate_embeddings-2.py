@@ -1,5 +1,5 @@
 """
-批量为现有 lexicon 重新生成 embedding
+批量为现有 lexicon 中没有生成 embedding 的条目生成 embedding
 用法: python -m app.scripts.generate_embeddings
 """
 import asyncio
@@ -13,13 +13,12 @@ from app.services.embedding_service import batch_generate_embeddings
 
 async def main():
     settings = get_settings()
-    # batch_size = settings.EMBEDDING_BATCH_SIZE
-    batch_size = 64
+    batch_size = settings.EMBEDDING_BATCH_SIZE
 
     async with AsyncSessionLocal() as db:
-        # 统计总数
+        # 统计待处理数量
         count_result = await db.execute(
-            select(func.count(Lexicon.id))
+            select(func.count(Lexicon.id)).where(Lexicon.embedding.is_(None))
         )
         total = count_result.scalar()
         print(f"待生成 embedding 的词库: {total} 条")
@@ -30,14 +29,12 @@ async def main():
 
         processed = 0
         while True:
-            # 按 ID 顺序分批查询
+            # 查询一批未生成 embedding 的 lexicon
             result = await db.execute(
                 select(Lexicon)
-                .order_by(Lexicon.id)
-                .offset(processed)
+                .where(Lexicon.embedding.is_(None))
                 .limit(batch_size)
             )
-
             lexicons = result.scalars().all()
 
             if not lexicons:
