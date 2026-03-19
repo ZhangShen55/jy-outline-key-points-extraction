@@ -36,6 +36,7 @@ class TaskStatusResponse(BaseModel):
     task_id: str
     status: int  # 0=completed, 1=pending, 2=queued, 3=processing, 4=failed
     message: str
+    syllabus_id: Optional[str] = None
 
     # 时间信息
     created_at: str

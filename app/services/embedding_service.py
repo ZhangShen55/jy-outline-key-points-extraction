@@ -33,6 +33,7 @@ async def generate_embedding(text: str) -> List[float]:
     response = await client.embeddings.create(
         model=settings.EMBEDDING_MODEL,
         input=text,
+        dimensions=settings.EMBEDDING_DIMENSION,
     )
     return response.data[0].embedding
 
@@ -55,6 +56,7 @@ async def batch_generate_embeddings(texts: List[str]) -> List[List[float]]:
         response = await client.embeddings.create(
             model=settings.EMBEDDING_MODEL,
             input=batch,
+            dimensions=settings.EMBEDDING_DIMENSION,
         )
         # 按 index 排序确保顺序一致
         sorted_data = sorted(response.data, key=lambda x: x.index)

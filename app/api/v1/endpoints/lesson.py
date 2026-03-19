@@ -86,12 +86,14 @@ async def analyze_lesson(
 
         # 创建数据库任务记录
         await TaskService.create_task(
-            db, task_id=task_id, task_type=TaskType.LESSON
+            db, task_id=task_id, task_type=TaskType.LESSON,
+            extra_data={"syllabus_id": request.syllabus_id},
         )
 
         # 初始化内存任务
         tasks[task_id] = {
             "task_id": task_id,
+            "syllabus_id": request.syllabus_id,
             "status": TaskStatus.PENDING,
             "message": "任务已提交，等待处理...",
             "created_at": datetime.utcnow().isoformat(),
@@ -141,6 +143,7 @@ async def get_lesson_status(task_id: str, db: AsyncSession = Depends(get_db)):
             task_id=db_task.task_id,
             status=db_task.status,
             message=_build_message(db_task.status),
+            syllabus_id=(db_task.extra_data or {}).get("syllabus_id"),
             created_at=db_task.created_at.isoformat(),
             started_at=db_task.started_at.isoformat() if db_task.started_at else None,
             completed_at=db_task.completed_at.isoformat() if db_task.completed_at else None,
@@ -166,6 +169,7 @@ async def get_lesson_status(task_id: str, db: AsyncSession = Depends(get_db)):
             task_id=task_id,
             status=task.get("status", TaskStatus.PENDING),
             message=task.get("message", ""),
+            syllabus_id=task.get("syllabus_id"),
             created_at=task.get("created_at", ""),
             started_at=task.get("started_at"),
             completed_at=task.get("completed_at"),

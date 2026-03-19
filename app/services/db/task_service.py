@@ -20,6 +20,7 @@ class TaskService:
         task_type: str,
         filename: Optional[str] = None,
         file_size: Optional[int] = None,
+        extra_data: Optional[Dict[str, Any]] = None,
     ) -> Task:
         """创建任务"""
         task = Task(
@@ -28,6 +29,7 @@ class TaskService:
             status=TaskStatus.PENDING,
             filename=filename,
             file_size=file_size,
+            extra_data=extra_data,
         )
         db.add(task)
         await db.commit()
