@@ -36,16 +36,17 @@ format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 file = ""
 
 [embedding]
-model = "BAAI/bge-large-zh-v1.5"
-base_url = "https://api.siliconflow.cn/v1"
+model = "BAAI/bge-m3"
+# 硅基流动："https://api.siliconflow.cn/v1"
+base_url = "http://10.80.5.25:3001/v1"
 dimension = 1024
 batch_size = 32
 
 [rerank]
 enabled = true
-model = "BAAI/bge-reranker-v2-m3"
-#base_url = "https://api.siliconflow.cn/v1"
-base_url = "http://10.80.5.25:3000/v1"
+model = "Qwen/Qwen3-Reranker-4B"
+base_url = "https://api.siliconflow.cn/v1"
+#base_url = "http://10.80.5.25:3000/v1"
 threshold_for_rerank = 50
 
 [lexicon_match]

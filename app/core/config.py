@@ -66,7 +66,7 @@ class Settings(BaseSettings):
 
     # Embedding 配置
     EMBEDDING_API_KEY: str = ""
-    EMBEDDING_MODEL: str = _toml.get("embedding", {}).get("model", "BAAI/bge-large-zh-v1.5")
+    EMBEDDING_MODEL: str = _toml.get("embedding", {}).get("model", "BAAI/bge-m3")
     EMBEDDING_BASE_URL: str = _toml.get("embedding", {}).get("base_url", "https://api.siliconflow.cn/v1")
     EMBEDDING_DIMENSION: int = _toml.get("embedding", {}).get("dimension", 1024)
     EMBEDDING_BATCH_SIZE: int = _toml.get("embedding", {}).get("batch_size", 32)
