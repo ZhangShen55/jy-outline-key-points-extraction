@@ -13,7 +13,6 @@ from app.services.embedding_service import batch_generate_embeddings
 
 async def main():
     settings = get_settings()
-    # batch_size = settings.EMBEDDING_BATCH_SIZE
     batch_size = 64
 
     async with AsyncSessionLocal() as db:

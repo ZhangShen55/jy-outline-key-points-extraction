@@ -1,7 +1,6 @@
-"""
-词库语义匹配服务
-Embedding 向量召回 + Rerank 精排
-数据库连接在查询完成后立即释放，不在外部API调用期间占用
+"""词库语义匹配服务。
+
+执行向量召回与 Rerank 精排，避免在外部 API 调用期间占用数据库连接。
 """
 from typing import Optional, List, Dict, Any
 from sqlalchemy import select, text
@@ -107,24 +106,21 @@ async def match_lexicons(
     top: int = 1,
     min_score: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """
-    词库语义匹配：向量召回 + 动态 rerank
-    自行管理数据库会话，查完即释放，不在外部API调用期间占用连接
-    """
+    """执行词库语义匹配。"""
     settings = get_settings()
     if min_score is None:
         min_score = settings.MATCH_DEFAULT_MIN_SCORE
 
-    # ===== 阶段1: 数据库操作（用完即释放连接）=====
+    # 数据库查询阶段
     async with AsyncSessionLocal() as db:
-        # 1. 验证搜索范围
+        # 校验搜索范围
         scope = await _validate_scope(db, task_id, chapter_num, category, point_title)
 
-        # 2. 生成查询向量
+        # 生成查询向量
         query_embedding = await generate_embedding(query_text)
         embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
-        # 3. pgvector 向量搜索
+        # 执行 pgvector 检索
         where_clause = _build_where_clause(task_id, chapter_num, category, point_title)
         recall_limit = max(top * 10, 100) if settings.RERANK_ENABLED else top
 
@@ -156,12 +152,11 @@ async def match_lexicons(
 
         result = await db.execute(text(sql), params)
         candidates = [dict(row._mapping) for row in result.fetchall()]
-    # ===== 数据库连接已被释放 =====
 
     if not candidates:
         return _empty_response(query_text, top, scope)
 
-    # ===== 阶段2: 外部API调用（数据库已释放）=====
+    # 外部 API 调用阶段
     use_rerank = (
         settings.RERANK_ENABLED and len(candidates) > settings.RERANK_THRESHOLD
     )

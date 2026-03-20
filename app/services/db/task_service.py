@@ -1,6 +1,4 @@
-"""
-任务数据库服务
-"""
+"""任务数据库服务。"""
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from sqlalchemy import select, func, update

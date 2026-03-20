@@ -193,6 +193,5 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 
-# 使用方式 调整上方参数
-# 终端运行
-# python app/tests/test_concurrency.py 
+# 使用前请按需调整上方参数
+# 运行命令：python app/tests/test_concurrency.py

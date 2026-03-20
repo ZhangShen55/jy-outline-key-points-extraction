@@ -1,6 +1,4 @@
-"""
-词库管理端点
-"""
+"""词库管理端点。"""
 from typing import Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Path
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,7 +16,7 @@ router = APIRouter()
 
 
 def parse_error(error_msg: str) -> tuple[int, str]:
-    """解析错误消息，返回状态码和消息"""
+    """解析错误消息并返回状态码。"""
     if ":" in error_msg:
         error_type, msg = error_msg.split(":", 1)
         if error_type == "task_not_found":
@@ -36,7 +34,6 @@ def parse_error(error_msg: str) -> tuple[int, str]:
     return 400, error_msg
 
 
-# 具体路径必须在通配符路径之前
 @router.get("/lexicon", response_model=LexiconResponse)
 async def get_lexicons(
     task_id: str = Query(..., description="大纲任务ID"),
@@ -45,8 +42,8 @@ async def get_lexicons(
     category: str = Query(..., description="类别: basic/keypoints/difficulty/politics"),
     db: AsyncSession = Depends(get_db),
 ):
-    """查询词库"""
-    # 验证category
+    """查询词库。"""
+    # 校验类别参数
     valid, msg = validate_category(category)
     if not valid:
         raise HTTPException(status_code=400, detail=msg)
@@ -69,7 +66,7 @@ async def get_syllabus_full(
     task_id: str = Path(..., description="大纲任务ID"),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取完整大纲结构（含最新词库修改）"""
+    """获取完整大纲结构。"""
     result = await SyllabusService.get_syllabus_full(db, task_id)
     if not result:
         raise HTTPException(status_code=404, detail="大纲不存在")
@@ -81,13 +78,13 @@ async def add_lexicons(
     request: LexiconRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """添加词库（支持批量，自动去重）"""
-    # 1. 验证category
+    """添加词库。"""
+    # 校验类别参数
     valid, msg = validate_category(request.category)
     if not valid:
         raise HTTPException(status_code=400, detail=msg)
 
-    # 2. 验证lexicons
+    # 校验并清洗词库列表
     valid, msg, cleaned_lexicons = validate_lexicons(request.lexicons)
     if not valid:
         raise HTTPException(status_code=400, detail=msg)
@@ -116,13 +113,13 @@ async def update_lexicons(
     request: LexiconRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """更新词库（完全替换）"""
-    # 1. 验证category
+    """更新词库。"""
+    # 校验类别参数
     valid, msg = validate_category(request.category)
     if not valid:
         raise HTTPException(status_code=400, detail=msg)
 
-    # 2. 验证lexicons
+    # 校验并清洗词库列表
     valid, msg, cleaned_lexicons = validate_lexicons(request.lexicons)
     if not valid:
         raise HTTPException(status_code=400, detail=msg)
@@ -155,13 +152,13 @@ async def delete_lexicons(
     terms: str = Query(..., description="要删除的词库，多个用逗号分隔"),
     db: AsyncSession = Depends(get_db),
 ):
-    """删除词库（支持批量，使用query参数）"""
-    # 1. 验证category
+    """删除词库。"""
+    # 校验类别参数
     valid, msg = validate_category(category)
     if not valid:
         raise HTTPException(status_code=400, detail=msg)
 
-    # 2. 解析terms
+    # 解析待删除词条
     lexicons = [term.strip() for term in terms.split(",") if term.strip()]
     if not lexicons:
         raise HTTPException(status_code=400, detail="terms参数不能为空")
@@ -184,7 +181,7 @@ async def delete_lexicons(
 async def match_lexicons(
     request: LexiconMatchRequest,
 ):
-    """词库语义匹配（Embedding + Rerank）"""
+    """执行词库语义匹配。"""
     try:
         result = await lexicon_match_service.match_lexicons(
             query_text=request.text,

@@ -6,7 +6,7 @@ from app.core.config import get_llm_config
 from app.core.logging_config import get_logger
 logger = get_logger(__name__)
 
-# -------------- 从配置文件加载参数 --------------
+# 加载配置
 llm_config = get_llm_config()
 MODEL = llm_config["model"]
 API_KEY = llm_config["api_key"]
@@ -43,7 +43,7 @@ def _call_llm_for_module(txt_file, prompt):
     return json_file, sub_usage
 
 
-# -------------- 智能摘要化 --------------
+# 摘要生成
 def extract_all_modules(out_dir):
     """
     遍历 chapters 下所有章节：
@@ -71,7 +71,7 @@ def extract_all_modules(out_dir):
 
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
-    # ---- 第一步：收集所有需要处理的任务 ----
+    # 收集待处理任务
     chapter_dirs = sorted(d for d in root.glob("*") if d.is_dir())
     tasks = []  # (chapter_dir, txt_file, key)
     for chapter_dir in chapter_dirs:
@@ -81,7 +81,7 @@ def extract_all_modules(out_dir):
 
     logger.info(f"共 {len(chapter_dirs)} 个章节，{len(tasks)} 个模块任务，开始并发调用 LLM...")
 
-    # ---- 第二步：并发提交所有 LLM 调用 ----
+    # 并发执行 LLM 调用
     future_map = {}  # future -> (chapter_dir, key)
     with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
         for chapter_dir, txt_file, key in tasks:
@@ -100,7 +100,7 @@ def extract_all_modules(out_dir):
             except Exception as e:
                 logger.info(f"❌ 处理 {chapter_dir.name}/{key} 失败: {e}")
 
-    # ---- 第三步：读取所有 JSON 结果，按章节组装 ----
+    # 读取 JSON 并按章节组装
     all_results = []
     for chapter_dir in chapter_dirs:
         chapter_name = chapter_dir.name.strip()
@@ -114,7 +114,6 @@ def extract_all_modules(out_dir):
             try:
                 with open(json_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                # module_name = key.replace(".txt", "")
                 module_name = FILE_TO_MODULE[key]
                 chapter_result["content"][module_name] = data
             except Exception as e:
@@ -126,7 +125,7 @@ def extract_all_modules(out_dir):
     logger.info("✅ 全部章节摘要生成并拼接完成！")
     logger.info("=" * 60)
 
-    # ---- 第四步：为所有知识点生成词库（lexicon）----
+    # 为知识点生成词库
     from app.services.summarizer.lexicon_generator import enrich_keywords_with_lexicon
 
     logger.info("\n开始为知识点生成词库...")

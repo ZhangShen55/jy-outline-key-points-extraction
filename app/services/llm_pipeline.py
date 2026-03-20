@@ -1,12 +1,4 @@
-"""
-LLM 文档提取管道
-
-处理流程：
-1. 从 PDF Base64 提取 Markdown 结构
-2. 按标题切分课程与章节
-3. 并发提取章节结构化 JSON
-4. 合并并去重词库
-"""
+"""LLM 文档提取管道。"""
 
 import asyncio
 import json
@@ -25,8 +17,6 @@ from app.core.logging_config import get_logger
 logger = get_logger(__name__)
 
 
-# ============ 核心类实现 ============
-
 class LLMPipeline:
     """LLM 文档提取管道。"""
     
@@ -39,16 +29,7 @@ class LLMPipeline:
         self.model = settings.LLM_MODEL
         
     async def run(self, filedata: str, orig_name: str = None) -> dict:
-        """
-        运行完整Pipeline
-
-        Args:
-            filedata: PDF 文件的 base64 字符串
-            orig_name: 原始文件名（不含后缀，可选）
-
-        Returns:
-            处理结果字典
-        """
+        """执行完整提取流程。"""
         total_start = time.time()
 
         logger.info("[1/4] 提取文档 Markdown 结构...")
@@ -109,11 +90,9 @@ class LLMPipeline:
             if not line:
                 continue
             
-            # 一级标题：课名
             if line.startswith('# ') and not line.startswith('##'):
                 course_name = line[2:].strip()
             
-            # 二级标题：章节
             elif line.startswith('## ') and not line.startswith('###'):
                 if current_chapter:
                     chapters.append(current_chapter)
@@ -122,11 +101,9 @@ class LLMPipeline:
                     'content': []
                 }
             
-            # 三级及以下标题：章节内容
             elif current_chapter and (line.startswith('#') or line):
                 current_chapter['content'].append(line)
         
-        # 写入最后一个章节
         if current_chapter:
             chapters.append(current_chapter)
         
@@ -141,8 +118,6 @@ class LLMPipeline:
         
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # logger.info(f"章节处理结果: results={results.json()}")
-
         # 收集处理成功的章节结果
         successful_results = []
         for i, result in enumerate(results):
@@ -158,13 +133,10 @@ class LLMPipeline:
         chapter_title = chapter['title']
         chapter_content = '\n'.join(chapter['content'])
         
-        # 构建章节提取提示词
         prompt = JSON_EXTRACTION_PROMPT_TEMPLATE.format(课程名=course_name)
         
-        # 组装章节输入内容
         input_content = f"## {chapter_title}\n{chapter_content}"
         
-        # 调用 LLM 提取章节结构化结果
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=[
@@ -174,8 +146,6 @@ class LLMPipeline:
             timeout=300
         )
         
-        # print(f"章节提取原始响应: {response.choices[0].message.content}")
-
         result_json = json.loads(json_repair.repair_json(response.choices[0].message.content))
         
 
@@ -197,18 +167,18 @@ class LLMPipeline:
         
         keywords = []
         
-        # 记录全局唯一词库词条
+        # 记录全局唯一词条
         seen_lexicons = set()
         
         for result in chapter_results:
             chapter_data = result['result']
             usage = result['usage']
             
-            # 累计 token 使用量
+            # 累计 token 用量
             total_prompt_tokens += usage['prompt_tokens']
             total_completion_tokens += usage['completion_tokens']
             
-            # 按章节内模块执行词库去重
+            # 在章节内去重词条
             if 'content' in chapter_data:
                 for module in chapter_data['content']:
                     for module_name, items in module.items():
@@ -230,7 +200,6 @@ class LLMPipeline:
         
         # 组装响应结构
         final_result = {
-            # 'model': self.model  # 不对外暴露模型
             'course': course_name,
             'result': keywords,
             'usage': {
@@ -243,18 +212,9 @@ class LLMPipeline:
         return final_result
 
 
-# ============ 便捷调用入口 ============
+# 便捷调用入口
 
 async def run_llm_pipeline(filedata: str, orig_name: str = None) -> dict:
-    """
-    运行LLM Pipeline的便捷函数
-
-    Args:
-        filedata: PDF 文件的 base64 字符串
-        orig_name: 原始文件名（不含后缀，可选）
-
-    Returns:
-        处理结果字典
-    """
+    """运行 LLM 提取管道。"""
     pipeline = LLMPipeline()
     return await pipeline.run(filedata, orig_name)

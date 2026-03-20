@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-# -------------- 新增：基于传统方法的章节切割 --------------
+# 章节切割
 def extract_chapters_by_traditional_method(full_text: str, output_dir: str):
     """
     使用传统字符串方法定位并切割章节

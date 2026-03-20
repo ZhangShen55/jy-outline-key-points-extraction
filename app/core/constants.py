@@ -1,8 +1,6 @@
-"""
-系统常量定义
-"""
+"""系统常量。"""
 
-# ─── 任务状态码 ───────────────────────────────────────────────────────────────
+# 任务状态
 class TaskStatus:
     """任务状态码"""
     COMPLETED = 0   # 已完成
@@ -36,23 +34,23 @@ class TaskStatus:
         return mapping.get(status.lower(), cls.PENDING)
 
 
-# ─── 任务类型 ─────────────────────────────────────────────────────────────────
+# 任务类型
 class TaskType:
     """任务类型"""
     SYLLABUS = "syllabus"  # 大纲提取
     LESSON = "lesson"      # 课堂分析
 
 
-# ─── 处理阶段 ─────────────────────────────────────────────────────────────────
+# 处理阶段
 class ProcessStage:
     """处理阶段"""
-    # 大纲提取阶段
+    # 大纲提取
     PARSING = "parsing"         # 文档解析
     SPLITTING = "splitting"     # 章节分割
     EXTRACTING = "extracting"   # LLM 提取
     GENERATING = "generating"   # 生成词库
 
-    # 课堂分析阶段
+    # 课堂分析
     MINDMAP = "mindmap"         # 生成脑图
     MATCHING = "matching"       # 章节匹配
     ANALYZING = "analyzing"     # 段落分析

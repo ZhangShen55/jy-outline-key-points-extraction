@@ -1,6 +1,4 @@
-"""
-大纲数据库服务
-"""
+"""大纲数据库服务。"""
 from typing import Optional, List, Dict, Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,18 +71,16 @@ class SyllabusService:
         filename: str,
         result: Dict[str, Any],
     ) -> int:
-        """保存完整大纲结构（包括章节、知识点、词库）"""
-        # 1. 创建大纲主记录
+        """保存完整大纲结构。"""
+        # 创建大纲记录
         syllabus = await SyllabusService.create_syllabus(
             db, task_id, course, filename, result
         )
 
-        # 2. 解析并保存章节、知识点、词库
+        # 解析并保存章节、知识点和词库
         result_data = result.get("result", {})
 
-        # 兼容两种结构：
-        # 1. result["result"] = {"keywords": [...], "usage": {...}}
-        # 2. result["result"] = [...]  (直接是 keywords 列表)
+        # 兼容 result["result"] 为字典或列表两种结构
         if isinstance(result_data, dict):
             keywords = result_data.get("keywords", [])
         elif isinstance(result_data, list):
@@ -94,7 +90,7 @@ class SyllabusService:
 
         for idx, kw in enumerate(keywords):
             try:
-                # 类型检查：确保 kw 是字典
+                # 确保章节数据为字典
                 if not isinstance(kw, dict):
                     logger.warning(f"跳过第 {idx+1} 个元素，类型错误: {type(kw)}")
                     continue
@@ -136,7 +132,7 @@ class SyllabusService:
                         if not isinstance(lexicon_list, list):
                             lexicon_list = []
 
-                        # 收集有效词库项，稍后批量生成 embedding
+                        # 收集有效词条并批量生成 embedding
                         valid_terms = [t for t in lexicon_list if t and isinstance(t, str)]
                         if valid_terms:
                             try:
@@ -176,7 +172,7 @@ class SyllabusService:
         category: str,
     ) -> Optional[Dict[str, Any]]:
         """查询指定知识点的词库（分步验证）"""
-        # 1. 验证task_id
+        # 校验 task_id
         syllabus_result = await db.execute(
             select(Syllabus).where(Syllabus.task_id == task_id)
         )
@@ -184,7 +180,7 @@ class SyllabusService:
         if not syllabus:
             raise ValueError(f"task_not_found:大纲任务 {task_id} 不存在")
 
-        # 2. 验证章节
+        # 校验章节
         chapter_result = await db.execute(
             select(Chapter)
             .where(Chapter.syllabus_id == syllabus.id, Chapter.chapter_num == chapter_num)
@@ -193,7 +189,7 @@ class SyllabusService:
         if not chapter:
             raise ValueError(f"chapter_not_found:章节 {chapter_num} 不存在")
 
-        # 3. 验证知识点
+        # 校验知识点
         point_result = await db.execute(
             select(KnowledgePoint)
             .where(
@@ -226,7 +222,7 @@ class SyllabusService:
         lexicons: List[str],
     ) -> Dict[str, Any]:
         """添加词库（去重、带验证、悲观锁）"""
-        # 1. 验证task_id是否存在
+        # 校验 task_id
         syllabus_result = await db.execute(
             select(Syllabus).where(Syllabus.task_id == task_id)
         )
@@ -234,7 +230,7 @@ class SyllabusService:
         if not syllabus:
             raise ValueError(f"task_not_found:大纲任务 {task_id} 不存在")
 
-        # 2. 验证章节是否存在
+        # 校验章节
         chapter_result = await db.execute(
             select(Chapter)
             .where(Chapter.syllabus_id == syllabus.id, Chapter.chapter_num == chapter_num)
@@ -243,7 +239,7 @@ class SyllabusService:
         if not chapter:
             raise ValueError(f"chapter_not_found:章节 {chapter_num} 不存在")
 
-        # 3. 验证知识点是否存在（使用悲观锁）
+        # 使用悲观锁校验知识点
         point_result = await db.execute(
             select(KnowledgePoint)
             .where(
@@ -258,23 +254,23 @@ class SyllabusService:
         if not point:
             raise ValueError(f"point_not_found:知识点 '{point_title}' (类别:{category}) 不存在")
 
-        # 4. 检查数量限制
+        # 检查数量限制
         current_count = len(point.lexicons)
         if current_count >= 50:
             raise ValueError(f"lexicon_limit:词库数量已达上限(50个),请先删除部分词库再添加")
 
-        # 5. 去重并过滤
+        # 去重并过滤词条
         existing = {lex.term for lex in point.lexicons}
         new_terms = [term for term in lexicons if term not in existing]
 
         if not new_terms:
             raise ValueError("conflict:所有词库已存在")
 
-        # 6. 检查添加后是否超限
+        # 检查添加后是否超限
         if current_count + len(new_terms) > 25:
             raise ValueError(f"lexicon_limit:添加后将超过上限，当前{current_count}个，最多还能添加{25-current_count}个")
 
-        # 7. 批量生成 embedding 并添加
+        # 生成 embedding 并写入词条
         try:
             embeddings = await batch_generate_embeddings(new_terms)
         except Exception as e:
@@ -311,7 +307,7 @@ class SyllabusService:
         lexicons: List[str],
     ) -> Dict[str, Any]:
         """替换词库（带验证、悲观锁、事务安全）"""
-        # 1. 验证task_id
+        # 校验 task_id
         syllabus_result = await db.execute(
             select(Syllabus).where(Syllabus.task_id == task_id)
         )
@@ -319,7 +315,7 @@ class SyllabusService:
         if not syllabus:
             raise ValueError(f"task_not_found:大纲任务 {task_id} 不存在")
 
-        # 2. 验证章节
+        # 校验章节
         chapter_result = await db.execute(
             select(Chapter)
             .where(Chapter.syllabus_id == syllabus.id, Chapter.chapter_num == chapter_num)
@@ -328,7 +324,7 @@ class SyllabusService:
         if not chapter:
             raise ValueError(f"chapter_not_found:章节 {chapter_num} 不存在")
 
-        # 3. 验证知识点（悲观锁）
+        # 校验知识点（悲观锁）
         point_result = await db.execute(
             select(KnowledgePoint)
             .where(
@@ -343,11 +339,11 @@ class SyllabusService:
         if not point:
             raise ValueError(f"point_not_found:知识点 '{point_title}' (类别:{category}) 不存在")
 
-        # 4. 检查数量限制
+        # 检查数量限制
         if len(lexicons) > 25:
             raise ValueError(f"lexicon_limit:词库数量不能超过25个，当前提交{len(lexicons)}个")
 
-        # 5. 批量生成 embedding 并构建新对象（事务安全）
+        # 生成 embedding 并构建新词条
         try:
             embeddings = await batch_generate_embeddings(lexicons)
         except Exception as e:
@@ -359,11 +355,11 @@ class SyllabusService:
             for term, emb in zip(lexicons, embeddings)
         ]
 
-        # 6. 删除旧词库
+        # 删除旧词条
         for lex in point.lexicons:
             await db.delete(lex)
 
-        # 7. 添加新词库
+        # 添加新词条
         db.add_all(new_lexicons)
 
         await db.commit()
@@ -390,7 +386,7 @@ class SyllabusService:
         lexicons: List[str],
     ) -> Dict[str, Any]:
         """删除指定词库（带验证、悲观锁）"""
-        # 1. 验证task_id
+        # 校验 task_id
         syllabus_result = await db.execute(
             select(Syllabus).where(Syllabus.task_id == task_id)
         )
@@ -398,7 +394,7 @@ class SyllabusService:
         if not syllabus:
             raise ValueError(f"task_not_found:大纲任务 {task_id} 不存在")
 
-        # 2. 验证章节
+        # 校验章节
         chapter_result = await db.execute(
             select(Chapter)
             .where(Chapter.syllabus_id == syllabus.id, Chapter.chapter_num == chapter_num)
@@ -407,7 +403,7 @@ class SyllabusService:
         if not chapter:
             raise ValueError(f"chapter_not_found:章节 {chapter_num} 不存在")
 
-        # 3. 验证知识点（悲观锁）
+        # 校验知识点（悲观锁）
         point_result = await db.execute(
             select(KnowledgePoint)
             .where(
@@ -422,7 +418,7 @@ class SyllabusService:
         if not point:
             raise ValueError(f"point_not_found:知识点 '{point_title}' (类别:{category}) 不存在")
 
-        # 4. 删除指定词库
+        # 删除指定词条
         terms_to_delete = set(lexicons)
         deleted = []
 

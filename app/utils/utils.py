@@ -46,7 +46,6 @@ def save_figure_to_local(pil_crop, save_dir, image_name, reading_order):
         # Save the figure
         pil_crop.save(figure_path, format="PNG", quality=95)
 
-        # logger.info(f"Saved figure: {figure_filename}")
         return figure_filename
 
     except Exception as e:
@@ -74,7 +73,7 @@ def convert_pdf_to_images(pdf_path, target_size=896):
 
             # Calculate scale to make longest dimension equal to target_size
             rect = page.rect
-            scale =3# target_size / max(rect.width, rect.height)
+            scale = 3
 
             # Render page as image
             mat = pymupdf.Matrix(scale, scale)
@@ -83,8 +82,6 @@ def convert_pdf_to_images(pdf_path, target_size=896):
             # Convert to PIL Image
             img_data = pix.tobytes("png")
             pil_image = Image.open(io.BytesIO(img_data))
-            #保存
-            # pil_image = pil_image.save(f"page_{page_num + 1}.png")
             images.append(pil_image)
 
         doc.close()
@@ -153,19 +150,15 @@ def save_combined_pdf_results(all_page_results, pdf_path, save_dir):
         with open(markdown_path, "w", encoding="utf-8") as f:
             f.write(markdown_content)
 
-        # logger.info(f"Combined markdown saved to: {markdown_path}")
-
     except ImportError:
         logger.info("MarkdownConverter not available, skipping markdown generation")
     except Exception as e:
         logger.info(f"Error generating markdown: {e}")
 
-    # logger.info(f"Combined JSON results saved to: {json_path}")
     return json_path
 
 
 def check_coord_valid(x1, y1, x2, y2, image_size=None, abs_coord=True):
-    # logger.info(f"check_coord_valid: {x1}, {y1}, {x2}, {y2}, {image_size}, {abs_coord}")
     if x2 <= x1 or y2 <= y1:
         return False, f"[{x1}, {y1}, {x2}, {y2}]"
     if x1 < 0 or y1 < 0:
@@ -173,7 +166,7 @@ def check_coord_valid(x1, y1, x2, y2, image_size=None, abs_coord=True):
     if not abs_coord:
         if x2 > 1 or y2 > 1:
             return False, f"[{x1}, {y1}, {x2}, {y2}]"
-    elif image_size is not None:  # has image size
+        # 校验带图片尺寸的绝对坐标
         if x2 > image_size[0] or y2 > image_size[1]:
             return False, f"[{x1}, {y1}, {x2}, {y2}]"
     return True, None

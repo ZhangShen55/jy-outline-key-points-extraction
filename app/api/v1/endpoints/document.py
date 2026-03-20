@@ -1,6 +1,4 @@
-"""
-文档处理端点
-"""
+"""文档处理端点。"""
 from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Depends
 from pathlib import Path
 import asyncio
@@ -23,15 +21,14 @@ from app.services.db.task_service import TaskService
 logger = get_logger(__name__)
 router = APIRouter()
 
-# 任务存储（单实例内存，多实例部署需替换为 Redis）
+# 单实例内存任务存储，多实例部署需替换为 Redis
 tasks: Dict[str, dict] = {}
 
-# 并发控制
 _settings = get_settings()
 _semaphore = asyncio.Semaphore(_settings.MAX_CONCURRENT)
 _queue_count = 0
 
-# 文件类型限制
+# 支持的文件类型
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".doc"}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 
@@ -47,18 +44,14 @@ def validate_file(file: UploadFile) -> None:
 
 
 async def convert_to_pdf_base64(file: UploadFile) -> str:
-    """
-    将上传的文件转为 PDF base64：
-    - PDF：直接编码
-    - doc/docx：转换为 PDF 后编码
-    """
+    """将上传文件转换为 PDF 的 base64 字符串。"""
     file_bytes = await file.read()
     ext = Path(file.filename).suffix.lower()
 
     if ext == ".pdf":
         return base64.b64encode(file_bytes).decode("utf-8")
 
-    # doc/docx 转 PDF
+    # Word 文档先转换为 PDF
     tmp_dir = Path(tempfile.mkdtemp())
     tmp_doc = tmp_dir / f"input{ext}"
     try:
@@ -74,12 +67,12 @@ async def convert_to_pdf_base64(file: UploadFile) -> str:
 
 
 async def process_document_background(task_id: str, tmp_file: str, orig_name: str, db: AsyncSession):
-    """后台处理文档的异步函数（LLM Pipeline）"""
+    """后台执行文档处理任务。"""
     global _queue_count
     settings = get_settings()
     start_time = datetime.utcnow()
 
-    # 队列已满，拒绝任务
+    # 超出队列上限时直接拒绝
     if _queue_count >= settings.MAX_QUEUE:
         await TaskService.fail_task(db, task_id, "服务繁忙，队列已满，请稍后重试")
         tasks[task_id]["status"] = TaskStatus.to_str(TaskStatus.FAILED)
@@ -107,7 +100,6 @@ async def process_document_background(task_id: str, tmp_file: str, orig_name: st
 
             result = await run_llm_pipeline(filedata, orig_name)
             
-            # logger.info(f"✅ 任务结果result： {result} 处理完成")
 
             result["id"] = task_id
 
@@ -116,7 +108,7 @@ async def process_document_background(task_id: str, tmp_file: str, orig_name: st
             # 完成任务并入库
             await TaskService.complete_task(db, task_id, result, elapsed)
 
-            # 保存大纲结构
+            # 持久化大纲结构
             from app.services.db.syllabus_service import SyllabusService
 
             await SyllabusService.save_full_syllabus(
@@ -153,31 +145,22 @@ async def process_document(
     background_tasks: BackgroundTasks = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    提交文档处理任务（异步）
-
-    支持 PDF、Word 文档上传，立即返回任务ID。
-    使用 GET /document/status/{task_id} 查询处理进度。
-    """
+    """提交文档处理任务。"""
     try:
-        # 1. 验证文件
         validate_file(file)
 
-        # 2. 生成任务ID
         task_id = f"syllabus-{uuid.uuid4().hex[:24]}"
         orig_name = Path(file.filename).stem
 
-        # 3. 转换为 PDF base64
         pdf_filedata = await convert_to_pdf_base64(file)
 
-        # 4. base64 落盘
+        # 临时保存编码后的 PDF 内容
         tmp_fd, tmp_file = tempfile.mkstemp(suffix=".b64", prefix=f"task_{task_id}_")
         import os
 
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
             f.write(pdf_filedata)
 
-        # 5. 创建数据库任务记录
         await TaskService.create_task(
             db,
             task_id=task_id,
@@ -186,7 +169,6 @@ async def process_document(
             file_size=file.size,
         )
 
-        # 6. 初始化内存任务
         tasks[task_id] = {
             "task_id": task_id,
             "status": TaskStatus.PENDING,
@@ -194,7 +176,6 @@ async def process_document(
             "created_at": datetime.utcnow().isoformat(),
         }
 
-        # 7. 提交后台任务
         background_tasks.add_task(process_document_background, task_id, tmp_file, orig_name, db)
 
         logger.info(f"📝 任务 {task_id} 已提交，文件: {file.filename}")
@@ -214,19 +195,12 @@ async def process_document(
 
 @router.get("/status/{task_id}", response_model=TaskStatusResponse)
 async def get_task_status(task_id: str, db: AsyncSession = Depends(get_db)):
-    """
-    查询大纲提取任务状态
-
-    只查询 /process 接口提交的任务，队列信息也只显示大纲提取任务
-    """
-    # 1. 先查数据库
+    """查询大纲提取任务状态。"""
     db_task = await TaskService.get_task_by_id(db, task_id)
     if db_task:
-        # 验证任务类型
         if db_task.task_type != TaskType.SYLLABUS:
             raise NotFoundException(message=f"任务 {task_id} 不是大纲提取任务")
 
-        # 获取大纲提取任务的队列统计
         queue_stats = await TaskService.get_queue_stats(db, TaskType.SYLLABUS)
 
         return TaskStatusResponse(
@@ -244,11 +218,10 @@ async def get_task_status(task_id: str, db: AsyncSession = Depends(get_db)):
             error=db_task.error,
         )
 
-    # 2. 数据库没有，查内存
     if task_id in tasks:
         task = tasks[task_id]
 
-        # 验证任务类型（通过task_id前缀判断）
+        # 通过 task_id 前缀校验任务类型
         if not task_id.startswith("syllabus-"):
             raise NotFoundException(message=f"任务 {task_id} 不是大纲提取任务")
 
@@ -273,7 +246,7 @@ async def get_task_status(task_id: str, db: AsyncSession = Depends(get_db)):
 
 
 def _build_message(status: int) -> str:
-    """根据状态码构建消息"""
+    """根据状态码生成提示消息。"""
     if status == TaskStatus.COMPLETED:
         return "处理完成"
     if status == TaskStatus.FAILED:

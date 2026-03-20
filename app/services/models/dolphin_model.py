@@ -11,7 +11,7 @@ from app.core.logging_config import get_logger
 logger = get_logger(__name__)
 
 
-# -------------- 第二部分：DOLPHIN 模型相关（来自 parser_page_hf.py） --------------
+# DOLPHIN 模型
 class DOLPHIN:
     def __init__(self, model_id_or_path):
         """Initialize the Hugging Face model"""
@@ -20,7 +20,6 @@ class DOLPHIN:
         self.model.eval()
         self.device = "cuda:0"  # 对应 CUDA_VISIBLE_DEVICES 中的第 0 张 GPU
         self.model.to(self.device)
-        # self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model = self.model.half()
 
         self.tokenizer = self.processor.tokenizer
@@ -77,52 +76,6 @@ class DOLPHIN:
             return results[0]
         return results
 
-# def process_document(document_path: str, model, save_dir, max_batch_size=None, max_workers=2, gpus="0,1"):
-#     """
-#     并行处理文档的每一页，控制 GPU 使用和并行数。
-#
-#     Args:
-#         document_path: 文档路径
-#         model: Dolphin 模型
-#         save_dir: 保存结果目录
-#         max_batch_size: 每批次处理大小
-#         max_workers: 并行子进程数
-#         gpus: 使用的 GPU id 列表，例如 "0,1"
-#     """
-#     import concurrent.futures
-#     import multiprocessing as mp
-#
-#     # PDF 转图片
-#     file_ext = os.path.splitext(document_path)[1].lower()
-#     if file_ext == '.pdf':
-#         images = convert_pdf_to_images(document_path)
-#         if not images:
-#             raise Exception(f"Failed to convert PDF {document_path} to images")
-#     else:
-#         images = [Image.open(document_path).convert("RGB")]
-#
-#     base_name = os.path.splitext(os.path.basename(document_path))[0]
-#
-#     # 每页的任务参数
-#     task_args = []
-#     for i, img in enumerate(images):
-#         # 指定 GPU 卡轮询
-#         gpu_id = gpus.split(",")[i % len(gpus.split(","))]
-#         task_args.append((img, model, save_dir, f"{base_name}_page_{i+1:03d}", max_batch_size, False, gpu_id))
-#
-#     # 设置 spawn
-#     mp.set_start_method('spawn', force=True)
-#
-#     results = []
-#
-#     # 使用可控并行数
-#     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers, mp_context=mp.get_context('spawn')) as executor:
-#         for res in executor.map(_process_single_image_wrapper_with_gpu, task_args):
-#             results.append(res)
-#
-#     # 汇总结果
-#     all_results = [{"page_number": i + 1, "elements": res} for i, res in enumerate(results)]
-#     return all_results
 
 def _process_single_image_wrapper_with_gpu(args):
     """
@@ -135,34 +88,6 @@ def _process_single_image_wrapper_with_gpu(args):
     model.model.to(device)
     model.device = device
     return process_single_image(image, model, save_dir, image_name, max_batch_size, save_individual)
-
-# def process_document(document_path: str, model, save_dir, max_batch_size=None):
-#     # 并行处理 相当于加了一个用 spawn 启动的进程池并行调用
-#     file_ext = os.path.splitext(document_path)[1].lower()
-#     if file_ext == '.pdf':
-#         images = convert_pdf_to_images(document_path)
-#         if not images:
-#             raise Exception(f"Failed to convert PDF {document_path} to images")
-#     else:
-#         images = [Image.open(document_path).convert("RGB")]
-#
-#     base_name = os.path.splitext(os.path.basename(document_path))[0]
-#     task_args = [
-#         (img, model, save_dir, f"{base_name}_page_{i+1:03d}", max_batch_size, False)
-#         for i, img in enumerate(images)
-#     ]
-#
-#     # 使用 spawn 启动子进程，避免 CUDA fork 问题
-#     mp.set_start_method('spawn', force=True)
-#     with concurrent.futures.ProcessPoolExecutor(mp_context=mp.get_context('spawn')) as executor:
-#         results = list(executor.map(_process_single_image_wrapper, task_args))
-#
-#     all_results = [
-#         {"page_number": i + 1, "elements": res}
-#         for i,  res in enumerate(results)
-#     ]
-#     # combined_json_path = save_combined_pdf_results(all_results, document_path, save_dir)
-#     return all_results
 
 
 def process_document(document_path: str, model, save_dir, max_batch_size=None):
@@ -197,7 +122,6 @@ def process_document(document_path: str, model, save_dir, max_batch_size=None):
         for i, res in enumerate(results)
     ]
 
-    # combined_json_path = save_combined_pdf_results(all_results, document_path, save_dir)
     return all_results
 
 
@@ -259,7 +183,7 @@ def process_elements(layout_results, padded_image, dims, model, max_batch_size, 
             if cropped.size > 0 and cropped.shape[0] > 3 and cropped.shape[1] > 3:
                 pil_crop = Image.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
                 if label == "fig":
-                    # ---------- 改动开始：不落盘，直接转 base64 ----------
+                    # 图片元素直接保存为 base64
                     buf = io.BytesIO() # 创建内存缓冲区
                     pil_crop.save(buf, format='JPEG') # 将图片保存到内存缓冲区
                     b64 = base64.b64encode(buf.getvalue()).decode() # 编码为Base64字符串
@@ -272,9 +196,8 @@ def process_elements(layout_results, padded_image, dims, model, max_batch_size, 
                             "reading_order": reading_order,
                         }
                     )
-                    # ---------- 改动结束 ----------
                 elif label == "tab":
-                    # ---------- 新增：表格也走 base64 ----------
+                    # 表格元素直接保存为 base64
                     buf = io.BytesIO()
                     pil_crop.save(buf, format='JPEG')
                     b64 = base64.b64encode(buf.getvalue()).decode()
@@ -311,10 +234,7 @@ def process_elements(layout_results, padded_image, dims, model, max_batch_size, 
         text_results = process_element_batch(text_elements, model, "Read text in the image.", max_batch_size)
         recognition_results.extend(text_results)
 
-    # Process table elements (in batches) —— 现在里面只存 base64，后续 parser_text.py 会二次调用视觉模型
-    # if table_elements:
-    #     table_results = process_element_batch(table_elements, model, "Parse the table in the image.", max_batch_size)
-    #     recognition_results.extend(table_results)
+    # 表格元素保留 base64，后续由 parser_text.py 二次解析
 
     # Sort elements by reading order
     recognition_results.sort(key=lambda x: x.get("reading_order", 0))

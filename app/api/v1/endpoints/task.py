@@ -1,6 +1,4 @@
-"""
-任务管理端点
-"""
+"""任务管理端点。"""
 from fastapi import APIRouter
 from typing import Dict
 
@@ -17,11 +15,7 @@ from app.api.v1.endpoints.document import tasks
 
 @router.get("/list", response_model=TaskListResponse)
 async def list_tasks():
-    """
-    列出所有任务
-
-    返回所有任务的列表和统计信息
-    """
+    """列出任务列表。"""
     task_list = [
         {
             "task_id": tid,
@@ -33,7 +27,7 @@ async def list_tasks():
         for tid, t in tasks.items()
     ]
 
-    # 统计各状态的任务数
+    # 汇总各状态的任务数量
     stats = {
         "total": len(task_list),
         "pending": sum(1 for t in task_list if t["status"] == "pending"),
@@ -47,11 +41,7 @@ async def list_tasks():
 
 @router.delete("/{task_id}")
 async def delete_task(task_id: str):
-    """
-    删除任务记录
-
-    删除指定的任务记录
-    """
+    """删除任务。"""
     if task_id not in tasks:
         raise NotFoundException(message=f"任务 {task_id} 不存在")
 

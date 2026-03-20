@@ -1,7 +1,4 @@
-"""
-词库生成器
-为每个知识点的 title 和 summary 生成匹配词库（lexicon）
-"""
+"""知识点词库生成。"""
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from app.services.models.call_llm import call_llm, extract_json_from_text
@@ -11,7 +8,7 @@ from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# -------------- 从配置文件加载参数 --------------
+# 加载配置
 llm_config = get_llm_config()
 MODEL = llm_config["model"]
 API_KEY = llm_config["api_key"]

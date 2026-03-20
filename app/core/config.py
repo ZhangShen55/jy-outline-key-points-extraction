@@ -1,6 +1,4 @@
-"""
-配置管理模块
-"""
+"""配置管理。"""
 import tomllib
 from pathlib import Path
 from pydantic_settings import BaseSettings

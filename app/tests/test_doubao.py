@@ -2,14 +2,14 @@ import os
 from openai import OpenAI
 import base64
 
-api_key = "3c815b38-9dc4-4e6e-b40a-7c0cd5d4512b"
+api_key = "3c815b38-9dc4-4e6e-b40a-xxxxxxx"
 
 client = OpenAI(
     base_url='https://ark.cn-beijing.volces.com/api/v3',
     api_key=api_key,
 )
 
-# Convert local files to Base64-encoded strings.
+# 将本地文件编码为 Base64 字符串。
 def encode_file(file_path):
   with open(file_path, "rb") as read_file:
     return base64.b64encode(read_file.read()).decode('utf-8')

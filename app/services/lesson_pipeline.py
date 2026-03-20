@@ -1,13 +1,4 @@
-"""
-课堂语音转写分析管道
-
-处理流程：
-1. 生成知识脑图（mindmap_generator）
-2. 章节匹配（LLM）
-3. 段落合并 + 并发知识点匹配
-4. 汇总匹配结果
-5. 组装最终输出
-"""
+"""课堂语音转写分析管道。"""
 
 import asyncio
 import json
@@ -36,7 +27,7 @@ from app.services.mindmap_generator import (
 logger = get_logger(__name__)
 
 
-# ─── 段落合并 ─────────────────────────────────────────────────────────────────
+# 段落合并
 
 def merge_text_segments(raw_segments: List[dict], target_chars: int = 200) -> List[dict]:
     """
@@ -45,7 +36,7 @@ def merge_text_segments(raw_segments: List[dict], target_chars: int = 200) -> Li
     2. 累积到 ~target_chars 字切段
     时间字段仅用于结果输出，不参与 LLM 判断。
     """
-    # Step 1: 按句末标点合并短句
+    # 先合并为完整句子
     sentences = []
     buf_text = ""
     buf_bg = None
@@ -69,7 +60,7 @@ def merge_text_segments(raw_segments: List[dict], target_chars: int = 200) -> Li
     if buf_text:
         sentences.append({"text": buf_text, "bg": buf_bg, "ed": buf_ed})
 
-    # Step 2: 累积到 target_chars 字切段
+    # 再按目标长度切段
     merged = []
     seg_id = 1
     acc_text = ""
@@ -105,7 +96,7 @@ def merge_text_segments(raw_segments: List[dict], target_chars: int = 200) -> Li
     return merged
 
 
-# ─── 章节匹配 ─────────────────────────────────────────────────────────────────
+# 章节匹配
 
 def _flatten_content(content) -> dict:
     """将 content 列表 [{"basic": [...]}, {"keypoints": [...]}] 展平为单个字典。"""
@@ -201,9 +192,6 @@ async def match_chapters(
         model=model,
         max_tokens=512,
         temperature=0.3,
-        # top_p=0.9,
-        # presence_penalty=0.0,
-        # response_format={"type": "json_object"},
     )
 
     try:
@@ -216,7 +204,7 @@ async def match_chapters(
     return matched, usage
 
 
-# ─── 提取匹配章节的四要点 ─────────────────────────────────────────────────────
+# 提取匹配章节的四要点
 
 def _extract_points_from_chapters(
     syllabus_result: dict,
@@ -280,7 +268,7 @@ def _realign_snippet(snippet: str, full_text: str) -> str:
     return best_sentence
 
 
-# ─── 段落-知识点匹配 ──────────────────────────────────────────────────────────
+# 段落匹配
 
 async def _match_one_segment(
     seg: dict,
@@ -304,9 +292,6 @@ async def _match_one_segment(
                 model=model,
                 max_tokens=1024,
                 temperature=0.3,
-                # top_p=0.9,
-                # presence_penalty=0.0,
-                # response_format={"type": "json_object"},
             )
         except Exception as e:
             logger.warning(f"段落匹配 LLM 调用失败 {seg['seg_id']}: {e}")
@@ -320,12 +305,12 @@ async def _match_one_segment(
         data = json.loads(json_repair.repair_json(stripped))
         if not data or not isinstance(data, dict) or data.get("no_match"):
             return None, usage
-        # 代码侧补入原始字段，避免 LLM 篡改
+        # 由服务端补齐原始字段
         for ms in data.get("matched_segments", []):
             ms["full_text"] = seg["text"]
             ms["bg"] = seg.get("bg")
             ms["ed"] = seg.get("ed")
-            # 将 LLM 返回的 snippet 对齐到 full_text 中的原始完整句子
+            # 将 snippet 对齐到原始完整句子
             if ms.get("text_snippet"):
                 ms["text_snippet"] = _realign_snippet(ms["text_snippet"], seg["text"])
         return data, usage
@@ -352,7 +337,7 @@ async def match_segments_to_points(
     return matches, usages
 
 
-# ─── 汇总匹配结果 ─────────────────────────────────────────────────────────────
+# 汇总匹配结果
 
 CAT_ORDER = {"basic": 0, "keypoints": 1, "difficulty": 2, "politics": 3}
 
@@ -380,7 +365,7 @@ def _compute_coverage(
         cat_totals[cat] = cat_totals.get(cat, 0) + 1
         cat_matched.setdefault(cat, set())
 
-    # (category, title) → chapter_num 查找表
+    # 构建 chapter_num 查找表
     point_chapter_map = {
         (p["category"], p["title"]): p.get("chapter_num", 0) for p in points
     }
@@ -393,7 +378,7 @@ def _compute_coverage(
         if m is None:
             continue
         key = (m.get("category", ""), m.get("title", ""))
-        # 注入 chapter_num
+        # 补充 chapter_num
         m["chapter_num"] = point_chapter_map.get(key, 0)
         valid_matches.append(m)
         matched_point_keys.add(key)
@@ -403,13 +388,13 @@ def _compute_coverage(
         for ms in m.get("matched_segments", []):
             matched_seg_ids.add(ms.get("seg_id", ""))
 
-    # matches 按 category 顺序 + seg_id 排序
+    # 按类别和 seg_id 排序
     valid_matches.sort(key=lambda m: (
         CAT_ORDER.get(m.get("category", ""), 99),
         m.get("matched_segments", [{}])[0].get("seg_id", "") if m.get("matched_segments") else "",
     ))
 
-    # 按固定顺序输出 category_coverage
+    # 按固定顺序输出分类覆盖率
     category_coverage = {}
     for cat in ("basic", "keypoints", "difficulty", "politics"):
         total = cat_totals.get(cat, 0)
@@ -528,7 +513,7 @@ async def _build_alerts(
     return {"type": alert_types, "message": message}, usage
 
 
-# ─── 主管道 ───────────────────────────────────────────────────────────────────
+# 主流程
 
 async def run_lesson_pipeline(
     syllabus_result: dict,
@@ -553,7 +538,7 @@ async def run_lesson_pipeline(
     original_count = len(text_segments)
     logger.info(f"[1/5] 生成知识脑图... 原始段数: {original_count}")
 
-    # Step 1: 脑图生成
+    # 生成知识脑图
     mindmap_result, mindmap_usage = await generate_course_mindmap(
         text_segments, model=model
     )
@@ -611,13 +596,7 @@ async def run_lesson_pipeline(
 
     result = {
         "primary_chapters": primary_chapters,
-        # "original_segments": original_count,
-        # "merged_segments_count": len(merged_segments),
-        # "merged_segments": merged_segments,
-        # "mindmap": mindmap_result,
         "match_result": match_result,
-        # "model": model,
-        # "usage": total_usage,
     }
 
     elapsed = time.time() - total_start

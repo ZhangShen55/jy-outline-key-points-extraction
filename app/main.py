@@ -1,6 +1,4 @@
-"""
-FastAPI 应用主入口
-"""
+"""FastAPI 应用入口。"""
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,16 +15,13 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
-    # 启动时初始化
+    """管理应用生命周期。"""
     setup_logging()
     logger.info("🚀 应用启动中...")
     yield
-    # 关闭时清理
     logger.info("👋 应用关闭中...")
 
 
-# 应用实例
 settings = get_settings()
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -35,7 +30,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# 挂载 CORS 中间件
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 生产环境应收紧
@@ -44,19 +38,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 注册全局异常处理
 register_exception_handlers(app)
 
-# 挂载静态文件
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# 注册路由
 app.include_router(api_v1_router, prefix="/api/v1")
 
 
 @app.get("/", tags=["根路径"])
 async def root():
-    """根路径，返回 API 信息"""
+    """返回 API 基本信息。"""
     return {
         "message": settings.PROJECT_NAME,
         "version": settings.VERSION,
@@ -68,7 +59,7 @@ async def root():
 
 @app.get("/health", response_model=HealthResponse, tags=["健康检查"])
 async def health_check():
-    """健康检查接口"""
+    """返回服务健康状态。"""
     from app.api.v1.endpoints.document import tasks
 
     return HealthResponse(
@@ -94,8 +85,3 @@ if __name__ == "__main__":
         reload=settings.DEBUG,
         log_level=settings.LOG_LEVEL.lower()
     )
-
-
-# 初始化数据库: python -m app.scripts.init_db
-
-# 运行命令示例: uvicorn app.main:app --port 5000 --host 0.0.0.0 --reload

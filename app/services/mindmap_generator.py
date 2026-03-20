@@ -1,8 +1,4 @@
-"""
-课程知识脑图生成器
-
-按照「知识脑图提取.md」实现，输入带时间戳的逐句转写文本，输出完整脑图结构。
-"""
+"""课程知识脑图生成。"""
 
 import asyncio
 import json
@@ -25,7 +21,7 @@ from app.prompts.mindmap import (
 logger = get_logger(__name__)
 
 
-# ─── 数据模型 ─────────────────────────────────────────────────────────────────
+# 数据模型
 
 class TextSegment(BaseModel):
     text: str
@@ -55,7 +51,7 @@ class SummaryOut(BaseModel):
     overall_label: str
 
 
-# ─── 工具函数 ─────────────────────────────────────────────────────────────────
+# 工具函数
 
 def split_into_4_parts(lst: list) -> list:
     n = len(lst)
@@ -77,7 +73,7 @@ def build_user_prompt(idx: int, segs: List[TextSegment]) -> str:
 
 
 def guard(seg_dict: dict) -> bool:
-    """业务规则校验，通过返回 True，失败返回 False。"""
+    """校验脑图结果结构。"""
     try:
         assert "key_points" in seg_dict
         assert "document_skims" in seg_dict
@@ -178,7 +174,7 @@ async def chat_raw(
     return content, usage
 
 
-# ─── 单段 LLM 调用 ────────────────────────────────────────────────────────────
+# 单段调用
 
 async def _call_one_attempt(
     prompt: str,
@@ -195,7 +191,6 @@ async def _call_one_attempt(
                 temperature=0.7,
                 top_p=0.8,
                 presence_penalty=1.5,
-                # response_format={"type": "json_object"},
             )
         except Exception as e:
             logger.warning(f"LLM 调用失败: {e}")
@@ -216,7 +211,7 @@ async def _call_one_attempt(
         return None, usage
 
 
-# ─── 并发重试编排 ─────────────────────────────────────────────────────────────
+# 并发重试
 
 async def run_until_all_pass(
     parts: List[List[TextSegment]],
@@ -238,7 +233,7 @@ async def run_until_all_pass(
         logger.info(f"脑图生成 Round {round_idx + 1}，待处理段数: {len(pending)}")
 
         tasks = [_call_one_attempt(prompts[i], model, semaphore) for i in pending]
-        round_results = await asyncio.gather(*tasks) # 并发处理
+        round_results = await asyncio.gather(*tasks)
 
         still_pending = []
         for idx, (seg, usage) in zip(pending, round_results):
@@ -258,7 +253,7 @@ async def run_until_all_pass(
     return results, usages
 
 
-# ─── 二次总结 ─────────────────────────────────────────────────────────────────
+# 汇总摘要
 
 def _validate_summary(data: dict):
     assert "full_overview" in data and "overall_label" in data
@@ -285,7 +280,6 @@ async def call_summary_ex(key_points: List[str], model: str) -> Tuple[Dict, Dict
         temperature=0.7,
         top_p=0.8,
         presence_penalty=1.5,
-        # response_format={"type": "json_object"},
     )
     data = json.loads(json_repair.repair_json(content))
     SummaryOut(**data)
@@ -293,7 +287,7 @@ async def call_summary_ex(key_points: List[str], model: str) -> Tuple[Dict, Dict
     return data, usage
 
 
-# ─── 主入口 ───────────────────────────────────────────────────────────────────
+# 主入口
 
 async def generate_course_mindmap(
     segments: List[dict],
@@ -302,12 +296,7 @@ async def generate_course_mindmap(
     concurrency: int = 4,
     max_rounds: int = 5,
 ) -> Tuple[Dict, Dict]:
-    """
-    输入带时间戳的逐句转写文本，输出完整脑图结构和 usage 统计。
-
-    Returns:
-        (mindmap_result, usage_dict)
-    """
+    """生成完整课程脑图。"""
     settings = get_settings()
     _model = model or settings.LLM_MODEL
 

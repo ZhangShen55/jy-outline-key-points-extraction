@@ -36,14 +36,7 @@ logger = get_logger(__name__)
 # 设置环境变量
 os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
-# -------------- 配置参数 --------------
-# API_KEY = "vllm"
-# BASE_URL = "http://10.80.5.25:8001/v1/chat/completions"
-# MODEL = "qwen3-8b"
-
-# model = "doubao-seed-2-0-pro-260215"
-# api_key = "3c815b38-9dc4-4e6e-b40a-7c0cd5d4512b"
-# base_url = "https://ark.cn-beijing.volces.com/api/v3"
+# 配置参数
 
 DOLPHIN_MODEL_PATH = r"/data1/vllm/wyx/Dolphin_project/hf_model/Dolphin"
 VLM_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"

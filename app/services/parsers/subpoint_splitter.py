@@ -4,7 +4,7 @@ from app.core.logging_config import get_logger
 logger = get_logger(__name__)
 
 
-# -------------- 子点二次切割（终极兜底版）--------------
+# 子点切割
 def split_subpoints(output_dir):
     chapters_root = Path(output_dir) / "chapters"
     if not chapters_root.exists():
