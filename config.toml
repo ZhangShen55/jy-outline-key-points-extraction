@@ -1,54 +1,149 @@
+# ============================================
+# 教学大纲提取与课堂分析服务配置
+# 说明：
+# 1) 敏感信息（API Key）建议放 .env，不建议写入此文件
+# 2) 本文件用于运行参数、并发、数据库与模型地址等配置
+# ============================================
+
 [project]
+# 项目名称（用于接口展示）
 name = "教学大纲四要点核心内容提取系统"
+# 版本号（用于接口展示）
 version = "1.0.0"
+# 是否开启调试（开发环境建议 true，生产建议 false）
 debug = true
 
 [chunking]
+# 文本分块大小（字符）
 chunk_size = 10000
+# 相邻分块重叠长度（字符）
 overlap = 1000
+# 批处理大小（用于分批处理文本）
 batch_size = 100
 
 [concurrency]
-# 同时处理的最大文档数
+# 同时处理的最大任务数（大纲/课堂共享）
 max_concurrent = 50
-# 等待队列上限，超出后返回 429
+# 等待队列上限（超出后拒绝或返回繁忙）
 max_queue = 1000
 
 [database]
+# 数据库主机
 host = "localhost"
+# 数据库端口
 port = 54320
+# 数据库用户名
 user = "postgres"
+# 数据库密码（生产环境建议改为环境变量）
 password = "Hz_edu123#"
+# 数据库名称
 name = "syllabus_db"
+# 连接池大小（长期连接数）
 pool_size = 100
+# 连接池允许的溢出连接数
 max_overflow = 50
+# 获取连接的超时时间（秒）
 pool_timeout = 30
 
 [logging]
+# 日志级别：DEBUG/INFO/WARNING/ERROR
 level = "INFO"
+# 日志格式
 format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+# 日志文件路径，空字符串表示仅输出到控制台
 file = ""
 
 [llm]
+# 主 LLM 模型名
 model = "doubao-seed-2-0-mini-260215"
+# OpenAI 兼容接口地址
 base_url = "https://ark.cn-beijing.volces.com/api/v3"
+# 单次请求最大 token 上限
 max_tokens = 8192
+# 采样温度（0 更稳定，越高越发散）
 temperature = 0
 
 [embedding]
+# 向量模型名（用于词库向量化）
 model = "BAAI/bge-m3"
-# 硅基流动："https://api.siliconflow.cn/v1"
+# 向量服务地址
+# 示例公网地址: "https://api.siliconflow.cn/v1"
 base_url = "http://10.80.5.25:3001/v1"
+# 向量维度（需与数据库 vector 列一致）
 dimension = 1024
+# 批量生成向量的 batch 大小
 batch_size = 32
 
 [rerank]
+# 是否开启 rerank 精排
 enabled = true
+# rerank 模型名
 model = "qwen3-reranker-4b"
-#base_url = "https://api.siliconflow.cn/v1"
+# rerank 服务地址
+# 示例公网地址: "https://api.siliconflow.cn/v1"
 base_url = "http://10.80.5.25:3000/v1"
+# 候选数达到该阈值时触发 rerank
 threshold_for_rerank = 50
 
 [lexicon_match]
+# 词库匹配默认最低分（0~1）
 default_min_score = 0.5
+# 词库匹配允许返回的最大 top 数
 max_top = 20
+
+# ============================================
+# 质量画像模块（预留模板，后续接入时启用）
+# 当前代码未读取以下段落，仅作为参数设计说明
+# ============================================
+
+# [quality]
+# # 是否启用质量画像模块
+# enabled = true
+# # 原始数据保留天数（超期可清理）
+# raw_retention_days = 90
+# # Worker 最大重试次数
+# retry_max_attempts = 3
+# # 重试基准退避秒数（指数退避）
+# retry_backoff_seconds = 2
+# # 失败任务补偿扫描间隔（秒）
+# compensate_interval_seconds = 900
+# # 任务取消检查间隔（秒）
+# task_cancel_check_interval_seconds = 5
+
+# [quality.trigger]
+# # 是否自动触发周画像重算
+# auto_week_recompute = true
+# # 是否自动触发学期画像重算
+# auto_semester_recompute = true
+# # target_week 为空时的默认策略（latest=截至当前最新周）
+# target_week_default = "latest"
+
+# [quality.taxonomy]
+# # 是否按周执行词库增量更新
+# weekly_update_enabled = true
+# # 新词准入最小置信度
+# min_term_confidence = 0.80
+# # 新词准入最小证据课时数
+# min_term_evidence_lessons = 2
+# # 新分类准入最小置信度
+# min_category_confidence = 0.85
+# # 新分类准入最小证据周数
+# min_category_evidence_weeks = 2
+# # 词条连续多少周无证据后删除（物理删除策略）
+# inactive_after_weeks = 4
+
+# [kafka]
+# # Kafka 集群地址
+# bootstrap_servers = "localhost:9092"
+# # 课时分析触发 Topic
+# topic_lesson_trigger = "quality.lesson.analysis.trigger.v1"
+# # 周画像触发 Topic
+# topic_week_trigger = "quality.profile.week.trigger.v1"
+# # 学期画像触发 Topic
+# topic_semester_trigger = "quality.profile.semester.trigger.v1"
+# # 死信队列 Topic
+# topic_dlq = "quality.dlq.v1"
+# # lesson worker 消费组
+# group_lesson_worker = "quality-lesson-worker"
+# # semester worker 消费组
+# group_semester_worker = "quality-semester-worker"
