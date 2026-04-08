@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS lessons (
     course_id UUID NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
     lesson_id VARCHAR(80) NOT NULL, -- 上游 lesson_id（仅在 course 内唯一）
     week_number INT NOT NULL CHECK (week_number > 0),
-    lesson_index INT NOT NULL CHECK (lesson_index > 0),
+    lesson_index_in_week INT NOT NULL CHECK (lesson_index_in_week > 0),
+    lesson_index_global INT NOT NULL CHECK (lesson_index_global > 0),
     start_time TIMESTAMP,
     end_time TIMESTAMP,
     avg_head_up_rate NUMERIC(5,4) CHECK (avg_head_up_rate IS NULL OR (avg_head_up_rate >= 0 AND avg_head_up_rate <= 1)),
@@ -51,16 +52,21 @@ CREATE TABLE IF NOT EXISTS lessons (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(course_id, lesson_id),
-    UNIQUE(course_id, week_number, lesson_index)
+    UNIQUE(course_id, week_number, lesson_index_in_week),
+    UNIQUE(course_id, lesson_index_global)
 );
 
 CREATE INDEX IF NOT EXISTS idx_lessons_course_id ON lessons(course_id);
 CREATE INDEX IF NOT EXISTS idx_lessons_status ON lessons(status);
 CREATE INDEX IF NOT EXISTS idx_lessons_week ON lessons(course_id, week_number);
+CREATE INDEX IF NOT EXISTS idx_lessons_week_index ON lessons(course_id, week_number, lesson_index_in_week);
+CREATE INDEX IF NOT EXISTS idx_lessons_global_index ON lessons(course_id, lesson_index_global);
 CREATE INDEX IF NOT EXISTS idx_lessons_analysis_updated_at ON lessons(analysis_updated_at);
 
 COMMENT ON TABLE lessons IS '课时表（按课程维度管理上游课时数据和处理状态）';
 COMMENT ON COLUMN lessons.lesson_id IS '上游课时ID，仅在同一course_id范围内唯一';
+COMMENT ON COLUMN lessons.lesson_index_in_week IS '周内课程序号（必填）';
+COMMENT ON COLUMN lessons.lesson_index_global IS '学期全局课程序号（必填）';
 COMMENT ON COLUMN lessons.avg_head_up_rate IS '课堂平均抬头率，建议值域0~1（NUMERIC(5,4)支持两位或四位小数）';
 COMMENT ON COLUMN lessons.status IS '0=pending, 1=ready, 2=analyzing, 3=success, 4=failed';
 COMMENT ON COLUMN lessons.analysis_updated_at IS '该课时最近一次分析结果写入完成时间';
@@ -219,4 +225,3 @@ COMMENT ON COLUMN ai_analysis_reports.report_level IS '报告层级：lesson/wee
 COMMENT ON COLUMN ai_analysis_reports.target_id IS '层级目标ID：lesson_id或week标识或course_id';
 COMMENT ON COLUMN ai_analysis_reports.module_name IS '模块名：radar/ideology_map/bloom_evolution等';
 COMMENT ON COLUMN ai_analysis_reports.report_data IS '模块渲染数据JSON（ECharts/看板直连数据）';
-

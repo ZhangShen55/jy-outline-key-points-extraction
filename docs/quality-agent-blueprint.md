@@ -76,7 +76,7 @@
 
 ### 4.2 关键约束
 
-1. `lessons` 建组合唯一：`UNIQUE(course_id, week_number, lesson_index)`。
+1. `lessons` 建组合唯一：`UNIQUE(course_id, week_number, lesson_index_in_week)` 与 `UNIQUE(course_id, lesson_index_global)`。
 2. `analysis_tasks` 使用 `dedupe_key` 做“活动任务”唯一约束（仅 queued/running）。
 3. `ai_analysis_reports` 建组合唯一：`UNIQUE(course_id, report_level, target_id, module_name)`，用于覆盖写入。
 
@@ -213,7 +213,7 @@
 `POST /api/v1/quality/courses/data-ingestion`
 
 - 功能：接收课时数据并触发 lesson 分析。
-- 输入：`course_id, lesson_id, week_number, lesson_index, avg_head_up_rate, asr_data, ocr_data`
+- 输入：`course_id, lesson_id, week_number, lesson_index_in_week, lesson_index_global, avg_head_up_rate, asr_data, ocr_data`
 - 输出：接收成功（202）或冲突/校验失败。
 
 ### 7.2 触发学期画像
