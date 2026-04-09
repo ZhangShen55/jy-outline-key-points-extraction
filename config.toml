@@ -29,7 +29,7 @@ max_queue = 1000
 
 [database]
 # 数据库主机
-host = "localhost"
+host = "10.80.5.25"
 # 数据库端口
 port = 54320
 # 数据库用户名
