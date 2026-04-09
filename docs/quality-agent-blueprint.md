@@ -71,8 +71,14 @@
 
 1. `courses.teacher` 允许为 `NULL`（非强制字段）。
 2. `lessons.avg_head_up_rate` 由上游透传，建议存储为 `0~1` 比例值。
-3. `lesson_asr_payloads` 增加 `created_at` 与 `updated_at`。
-4. `ocr_segments.time_offset`、`ocr_segments.page_num` 设为 `NOT NULL`（上游必传）。
+3. `lessons` 增加 5 个独立分值字段（`0~100`，可空）：
+   - `score_high_order`（高阶性）
+   - `score_innovation`（创新性）
+   - `score_fun_experience`（趣味体验）
+   - `score_challenge`（挑战度）
+   - `score_ideology`（课程思政）
+4. `lesson_asr_payloads` 增加 `created_at` 与 `updated_at`。
+5. `ocr_segments.time_offset`、`ocr_segments.page_num` 设为 `NOT NULL`（上游必传）。
 
 ### 4.2 关键约束
 
@@ -109,16 +115,20 @@
    - 含义：该课时最近一次“分析结果完成写入”的时间戳。
    - 用途：增量触发判断、排障追踪、前端缓存刷新判断。
 
-3. `quality_taxonomy_terms.first_seen_week` / `last_seen_week`：
+3. `lessons.score_*`（五类分值）：
+   - 含义：lesson 粒度评分结果（`0~100`），由 lesson 分析任务回写。
+   - 用途：作为周/学期雷达分聚合的数据底座（直接 `AVG`）。
+
+4. `quality_taxonomy_terms.first_seen_week` / `last_seen_week`：
    - `first_seen_week`：词条首次在第几周被证据命中。
    - `last_seen_week`：词条最近一次被命中的周次。
    - 用途：支持“按周收敛删除”策略（物理删除前的判断依据）。
 
-4. `analysis_tasks.dedupe_key`：
+5. `analysis_tasks.dedupe_key`：
    - 含义：任务去重键，格式建议 `"{course_id}:{task_kind}:{target_week_or_latest}"`。
    - 用途：保证同键任务串行执行，避免并发重复计算。
 
-5. `analysis_tasks.graph_state`（JSONB）：
+6. `analysis_tasks.graph_state`（JSONB）：
    - 含义：任务运行中的节点状态快照（运行时上下文）。
    - 参考示例：
 ```json

@@ -46,6 +46,11 @@ CREATE TABLE IF NOT EXISTS lessons (
     start_time TIMESTAMP,
     end_time TIMESTAMP,
     avg_head_up_rate NUMERIC(5,4) CHECK (avg_head_up_rate IS NULL OR (avg_head_up_rate >= 0 AND avg_head_up_rate <= 1)),
+    score_high_order NUMERIC(5,2) CHECK (score_high_order IS NULL OR (score_high_order >= 0 AND score_high_order <= 100)),
+    score_innovation NUMERIC(5,2) CHECK (score_innovation IS NULL OR (score_innovation >= 0 AND score_innovation <= 100)),
+    score_fun_experience NUMERIC(5,2) CHECK (score_fun_experience IS NULL OR (score_fun_experience >= 0 AND score_fun_experience <= 100)),
+    score_challenge NUMERIC(5,2) CHECK (score_challenge IS NULL OR (score_challenge >= 0 AND score_challenge <= 100)),
+    score_ideology NUMERIC(5,2) CHECK (score_ideology IS NULL OR (score_ideology >= 0 AND score_ideology <= 100)),
     status SMALLINT NOT NULL DEFAULT 0 CHECK (status IN (0, 1, 2, 3, 4)),
     failed_reason TEXT,
     analysis_updated_at TIMESTAMP,
@@ -68,6 +73,11 @@ COMMENT ON COLUMN lessons.lesson_id IS '上游课时ID，仅在同一course_id�
 COMMENT ON COLUMN lessons.lesson_index_in_week IS '周内课程序号（必填）';
 COMMENT ON COLUMN lessons.lesson_index_global IS '学期全局课程序号（必填）';
 COMMENT ON COLUMN lessons.avg_head_up_rate IS '课堂平均抬头率，建议值域0~1（NUMERIC(5,4)支持两位或四位小数）';
+COMMENT ON COLUMN lessons.score_high_order IS '课时高阶性分值（0~100）';
+COMMENT ON COLUMN lessons.score_innovation IS '课时创新性分值（0~100）';
+COMMENT ON COLUMN lessons.score_fun_experience IS '课时趣味体验分值（0~100）';
+COMMENT ON COLUMN lessons.score_challenge IS '课时挑战度分值（0~100）';
+COMMENT ON COLUMN lessons.score_ideology IS '课时课程思政分值（0~100）';
 COMMENT ON COLUMN lessons.status IS '0=pending, 1=ready, 2=analyzing, 3=success, 4=failed';
 COMMENT ON COLUMN lessons.analysis_updated_at IS '该课时最近一次分析结果写入完成时间';
 

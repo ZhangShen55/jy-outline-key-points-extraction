@@ -53,6 +53,11 @@ class Lesson(Base):
     start_time = Column(TIMESTAMP)
     end_time = Column(TIMESTAMP)
     avg_head_up_rate = Column(Numeric(5, 4))
+    score_high_order = Column(Numeric(5, 2))
+    score_innovation = Column(Numeric(5, 2))
+    score_fun_experience = Column(Numeric(5, 2))
+    score_challenge = Column(Numeric(5, 2))
+    score_ideology = Column(Numeric(5, 2))
     status = Column(SmallInteger, nullable=False, default=0, index=True)
     failed_reason = Column(Text)
     analysis_updated_at = Column(TIMESTAMP)
@@ -69,6 +74,26 @@ class Lesson(Base):
         CheckConstraint(
             "avg_head_up_rate IS NULL OR (avg_head_up_rate >= 0 AND avg_head_up_rate <= 1)",
             name="ck_lessons_head_up_rate_range",
+        ),
+        CheckConstraint(
+            "score_high_order IS NULL OR (score_high_order >= 0 AND score_high_order <= 100)",
+            name="ck_lessons_score_high_order_range",
+        ),
+        CheckConstraint(
+            "score_innovation IS NULL OR (score_innovation >= 0 AND score_innovation <= 100)",
+            name="ck_lessons_score_innovation_range",
+        ),
+        CheckConstraint(
+            "score_fun_experience IS NULL OR (score_fun_experience >= 0 AND score_fun_experience <= 100)",
+            name="ck_lessons_score_fun_experience_range",
+        ),
+        CheckConstraint(
+            "score_challenge IS NULL OR (score_challenge >= 0 AND score_challenge <= 100)",
+            name="ck_lessons_score_challenge_range",
+        ),
+        CheckConstraint(
+            "score_ideology IS NULL OR (score_ideology >= 0 AND score_ideology <= 100)",
+            name="ck_lessons_score_ideology_range",
         ),
         CheckConstraint("status IN (0,1,2,3,4)", name="ck_lessons_status_enum"),
     )
@@ -196,4 +221,3 @@ class AiAnalysisReport(Base):
         UniqueConstraint("course_id", "report_level", "target_id", "module_name", name="uq_ai_reports_unique"),
         CheckConstraint("report_level IN ('lesson', 'week', 'semester')", name="ck_ai_reports_level_enum"),
     )
-
