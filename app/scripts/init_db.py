@@ -7,7 +7,21 @@ from pathlib import Path
 
 from app.core.database import async_engine, Base
 from app.core.logging_config import get_logger
-from app.models import Task, Syllabus, Chapter, KnowledgePoint, Lexicon
+from app.models import (
+    Task,
+    Syllabus,
+    Chapter,
+    KnowledgePoint,
+    Lexicon,
+    Course,
+    Lesson,
+    LessonAsrPayload,
+    OcrSegment,
+    QualityTaxonomyTerm,
+    AnalysisTask,
+    AnalysisTaskEvent,
+    AiAnalysisReport,
+)
 
 logger = get_logger(__name__)
 
