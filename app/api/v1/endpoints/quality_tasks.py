@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database import get_quality_db
 from app.models.quality import AnalysisTask, Course
 from app.schemas.quality import (
     QualityBaseResponse,
@@ -32,7 +32,7 @@ router = APIRouter()
 async def generate_semester_profile(
     request: SemesterProfileGenerateRequest,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_quality_db),
 ):
     """触发学期画像任务。"""
     trace_id = uuid.uuid4().hex
@@ -97,7 +97,7 @@ async def generate_semester_profile(
 @router.post("/tasks/semester-profile/status/query", response_model=QualityBaseResponse)
 async def query_semester_profile_status(
     request: SemesterProfileStatusQueryRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_quality_db),
 ):
     """查询任务状态。"""
     trace_id = uuid.uuid4().hex
@@ -159,7 +159,7 @@ async def query_semester_profile_status(
 @router.post("/tasks/cancel", response_model=QualityBaseResponse)
 async def cancel_quality_task(
     request: QualityTaskCancelRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_quality_db),
 ):
     """取消任务。"""
     trace_id = uuid.uuid4().hex

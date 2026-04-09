@@ -45,6 +45,24 @@ max_overflow = 50
 # 获取连接的超时时间（秒）
 pool_timeout = 30
 
+[quality_database]
+# 质量画像数据库主机（与主库解耦）
+host = "10.80.5.25"
+# 质量画像数据库端口
+port = 54320
+# 质量画像数据库用户名
+user = "postgres"
+# 质量画像数据库密码
+password = "Hz_edu123#"
+# 质量画像数据库名称（建议独立库）
+name = "quality_db"
+# 连接池大小（长期连接数）
+pool_size = 100
+# 连接池允许的溢出连接数
+max_overflow = 50
+# 获取连接的超时时间（秒）
+pool_timeout = 30
+
 [logging]
 # 日志级别：DEBUG/INFO/WARNING/ERROR
 level = "INFO"

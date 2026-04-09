@@ -345,6 +345,7 @@
 - `[quality]`：开关、保留期、重试、补偿、取消检查
 - `[quality.trigger]`：自动触发策略
 - `[quality.taxonomy]`：词库更新阈值
+- `[quality_database]`：质量画像独立数据库连接
 - `[kafka]`：broker、topics、group id
 
 ---

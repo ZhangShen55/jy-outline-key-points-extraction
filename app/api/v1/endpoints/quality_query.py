@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database import get_quality_db
 from app.models.quality import AiAnalysisReport, AnalysisTask, Course, Lesson
 from app.schemas.quality import QualityBaseResponse, SemesterProfileModuleQueryRequest
 from app.services.quality_service import VALID_MODULES, VALID_REPORT_LEVELS
@@ -20,7 +20,7 @@ router = APIRouter()
 @router.post("/courses/semester-profile/module/query", response_model=QualityBaseResponse)
 async def query_semester_profile_module(
     request: SemesterProfileModuleQueryRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_quality_db),
 ):
     """查询看板模块数据。"""
     trace_id = uuid.uuid4().hex

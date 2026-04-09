@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     DB_MAX_OVERFLOW: int = _toml.get("database", {}).get("max_overflow", 50)
     DB_POOL_TIMEOUT: int = _toml.get("database", {}).get("pool_timeout", 30)
 
+    # 质量画像数据库
+    QUALITY_DB_HOST: str = _toml.get("quality_database", {}).get("host", _toml.get("database", {}).get("host", "localhost"))
+    QUALITY_DB_PORT: int = _toml.get("quality_database", {}).get("port", _toml.get("database", {}).get("port", 54320))
+    QUALITY_DB_USER: str = _toml.get("quality_database", {}).get("user", _toml.get("database", {}).get("user", "postgres"))
+    QUALITY_DB_PASSWORD: str = _toml.get("quality_database", {}).get("password", _toml.get("database", {}).get("password", ""))
+    QUALITY_DB_NAME: str = _toml.get("quality_database", {}).get("name", _toml.get("database", {}).get("name", "syllabus_db"))
+    QUALITY_DB_POOL_SIZE: int = _toml.get("quality_database", {}).get("pool_size", _toml.get("database", {}).get("pool_size", 100))
+    QUALITY_DB_MAX_OVERFLOW: int = _toml.get("quality_database", {}).get("max_overflow", _toml.get("database", {}).get("max_overflow", 50))
+    QUALITY_DB_POOL_TIMEOUT: int = _toml.get("quality_database", {}).get("pool_timeout", _toml.get("database", {}).get("pool_timeout", 30))
+
     # 日志配置
     LOG_LEVEL: str = _toml.get("logging", {}).get("level", "INFO")
     LOG_FILE: str = _toml.get("logging", {}).get("file", "app.log")

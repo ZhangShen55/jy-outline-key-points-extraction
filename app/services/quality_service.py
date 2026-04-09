@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import and_, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import AsyncSessionLocal
+from app.core.database import QualityAsyncSessionLocal
 from app.core.logging_config import get_logger
 from app.models.quality import (
     AiAnalysisReport,
@@ -324,6 +324,11 @@ async def ingest_data(db: AsyncSession, request: QualityDataIngestionRequest) ->
             lesson_index_in_week=request.lesson_index_in_week,
             lesson_index_global=request.lesson_index_global,
             avg_head_up_rate=request.avg_head_up_rate,
+            score_high_order=None,
+            score_innovation=None,
+            score_fun_experience=None,
+            score_challenge=None,
+            score_ideology=None,
             status=1,  # ready
             failed_reason=None,
             created_at=now_utc(),
@@ -337,6 +342,11 @@ async def ingest_data(db: AsyncSession, request: QualityDataIngestionRequest) ->
         lesson.lesson_index_in_week = request.lesson_index_in_week
         lesson.lesson_index_global = request.lesson_index_global
         lesson.avg_head_up_rate = request.avg_head_up_rate
+        lesson.score_high_order = None
+        lesson.score_innovation = None
+        lesson.score_fun_experience = None
+        lesson.score_challenge = None
+        lesson.score_ideology = None
         lesson.status = 1  # ready
         lesson.failed_reason = None
         lesson.updated_at = now_utc()
@@ -487,7 +497,7 @@ async def _cancel_if_requested(db: AsyncSession, task: AnalysisTask) -> bool:
 
 async def run_lesson_analysis_background(course_id: str, lesson_id: str) -> None:
     """最小课时分析后台任务。"""
-    async with AsyncSessionLocal() as db:
+    async with QualityAsyncSessionLocal() as db:
         lesson = await db.scalar(
             select(Lesson).where(
                 Lesson.course_id == course_id,
@@ -552,6 +562,20 @@ async def run_lesson_analysis_background(course_id: str, lesson_id: str) -> None
                 "active_emotions_count": int(stats["active_emotions_count"]),
             }
 
+            # 课时五类分值（用于周/学期聚合）
+            avg_speed = _safe_float(stats["avg_speed"], 0.0)
+            white_space_rate = _safe_float(stats["white_space_rate"], 0.0)
+            challenge_score = max(
+                0.0,
+                min(
+                    100.0,
+                    0.55 * min(avg_speed / 2.0, 100.0) + 0.45 * (100.0 * (1.0 - white_space_rate)),
+                ),
+            )
+            ideology_score = max(0.0, min(100.0, 50.0 + len(ideology_hits) * 5.0))
+            innovation_score = max(0.0, min(100.0, 50.0 + len(innovation_hits) * 5.0))
+            fun_score = max(0.0, min(100.0, avg_head * 100.0))
+
             await _upsert_report(
                 db,
                 course_id=course_id,
@@ -586,6 +610,11 @@ async def run_lesson_analysis_background(course_id: str, lesson_id: str) -> None
             )
 
             lesson.status = 3
+            lesson.score_high_order = round(float(bloom_high), 2)
+            lesson.score_innovation = round(float(innovation_score), 2)
+            lesson.score_fun_experience = round(float(fun_score), 2)
+            lesson.score_challenge = round(float(challenge_score), 2)
+            lesson.score_ideology = round(float(ideology_score), 2)
             lesson.failed_reason = None
             lesson.analysis_updated_at = now_utc()
             lesson.updated_at = now_utc()
@@ -629,11 +658,30 @@ def _module_payloads_for_semester(
     terms: List[QualityTaxonomyTerm],
 ) -> Dict[str, Dict[str, Any]]:
     analyzed_lessons = len(success_lessons)
-    high_order = min(95, 60 + analyzed_lessons)
-    challenge = min(95, 65 + analyzed_lessons // 2)
-    ideology = min(95, 70 + min(20, len([t for t in terms if t.term_type == "ideology"]) * 2))
-    innovation = min(95, 70 + min(20, len([t for t in terms if t.term_type == "innovation"]) * 2))
-    fun_experience = int(max(0, min(100, avg_head * 100)))
+    lesson_high_order_scores = [float(l.score_high_order) for l in success_lessons if l.score_high_order is not None]
+    lesson_challenge_scores = [float(l.score_challenge) for l in success_lessons if l.score_challenge is not None]
+    lesson_ideology_scores = [float(l.score_ideology) for l in success_lessons if l.score_ideology is not None]
+    lesson_innovation_scores = [float(l.score_innovation) for l in success_lessons if l.score_innovation is not None]
+    lesson_fun_scores = [float(l.score_fun_experience) for l in success_lessons if l.score_fun_experience is not None]
+
+    # 优先使用 lesson 五类分值聚合，缺失时回退占位估算。
+    high_order = round(_avg(lesson_high_order_scores), 1) if lesson_high_order_scores else float(min(95, 60 + analyzed_lessons))
+    challenge = round(_avg(lesson_challenge_scores), 1) if lesson_challenge_scores else float(min(95, 65 + analyzed_lessons // 2))
+    ideology = (
+        round(_avg(lesson_ideology_scores), 1)
+        if lesson_ideology_scores
+        else float(min(95, 70 + min(20, len([t for t in terms if t.term_type == "ideology"]) * 2)))
+    )
+    innovation = (
+        round(_avg(lesson_innovation_scores), 1)
+        if lesson_innovation_scores
+        else float(min(95, 70 + min(20, len([t for t in terms if t.term_type == "innovation"]) * 2)))
+    )
+    fun_experience = (
+        round(_avg(lesson_fun_scores), 1)
+        if lesson_fun_scores
+        else float(int(max(0, min(100, avg_head * 100))))
+    )
     overall_score = round((high_order + challenge + ideology + innovation + fun_experience) / 5.0, 1)
 
     radar_payload = {
@@ -743,7 +791,7 @@ def _module_payloads_for_semester(
 
 async def run_semester_profile_task_background(task_id: str) -> None:
     """最小学期画像后台任务。"""
-    async with AsyncSessionLocal() as db:
+    async with QualityAsyncSessionLocal() as db:
         task = await db.scalar(select(AnalysisTask).where(AnalysisTask.id == task_id))
         if task is None:
             return

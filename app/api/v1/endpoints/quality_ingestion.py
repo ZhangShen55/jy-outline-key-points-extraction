@@ -7,7 +7,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database import get_quality_db
 from app.schemas.quality import QualityBaseResponse, QualityDataIngestionRequest
 from app.services.quality_service import (
     QualityServiceError,
@@ -22,7 +22,7 @@ router = APIRouter()
 async def data_ingestion(
     request: QualityDataIngestionRequest,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_quality_db),
 ):
     """接收课时多模态数据并触发分析。"""
     trace_id = uuid.uuid4().hex
