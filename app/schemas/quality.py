@@ -30,6 +30,7 @@ class OcrSegment(BaseModel):
     time_offset: int = Field(..., ge=0, description="相对课时起点秒级偏移（必填）")
     page_num: int = Field(..., ge=1, description="课件页码（必填）")
     ocr_content: str = Field(..., min_length=1, description="OCR文本")
+    ocr_keywords: List[str] = Field(default_factory=list, description="关键词列表")
 
 
 class QualityDataIngestionRequest(BaseModel):

@@ -376,6 +376,7 @@ async def ingest_data(db: AsyncSession, request: QualityDataIngestionRequest) ->
                 time_offset=seg.time_offset,
                 page_num=seg.page_num,
                 ocr_content=seg.ocr_content,
+                ocr_keywords=[str(x) for x in (seg.ocr_keywords or []) if str(x).strip()],
                 created_at=now_utc(),
             )
             for seg in request.ocr_data

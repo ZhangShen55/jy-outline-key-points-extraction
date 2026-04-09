@@ -120,6 +120,7 @@ class OcrSegment(Base):
     time_offset = Column(Integer, nullable=False)
     page_num = Column(Integer, nullable=False)
     ocr_content = Column(Text, nullable=False)
+    ocr_keywords = Column(JSONB, nullable=False, default=list)
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
 
     __table_args__ = (

@@ -79,6 +79,7 @@
    - `score_ideology`（课程思政）
 4. `lesson_asr_payloads` 增加 `created_at` 与 `updated_at`。
 5. `ocr_segments.time_offset`、`ocr_segments.page_num` 设为 `NOT NULL`（上游必传）。
+6. `ocr_segments.ocr_keywords`：OCR 关键词列表。
 
 ### 4.2 关键约束
 
