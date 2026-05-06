@@ -73,9 +73,14 @@ file = ""
 
 [llm]
 # 主 LLM 模型名
-model = "doubao-seed-2-0-mini-260215"
-# OpenAI 兼容接口地址
-base_url = "https://ark.cn-beijing.volces.com/api/v3"
+# 火山云平台
+# model = "doubao-seed-2-0-mini-260215"
+# base_url = "https://ark.cn-beijing.volces.com/api/v3"
+# 轨基流动平台
+model = "Qwen/Qwen3-32B"
+base_url = "https://api.siliconflow.cn/v1"
+
+
 # 单次请求最大 token 上限
 max_tokens = 8192
 # 采样温度（0 更稳定，越高越发散）
@@ -108,6 +113,16 @@ threshold_for_rerank = 50
 default_min_score = 0.5
 # 词库匹配允许返回的最大 top 数
 max_top = 20
+
+[mineru]
+# 是否启用 MinerU 文档解析（启用后替代 VLM 文档解析，可使用纯文本 LLM）
+enabled = true
+# MinerU 服务地址
+base_url = "http://10.80.5.25:8000"
+# 文件解析接口路径
+parse_endpoint = "/file_parse"
+# 请求超时（秒）
+timeout = 120
 
 # ============================================
 # 质量画像模块（预留模板，后续接入时启用）

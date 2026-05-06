@@ -84,6 +84,12 @@ class Settings(BaseSettings):
     MATCH_DEFAULT_MIN_SCORE: float = _toml.get("lexicon_match", {}).get("default_min_score", 0.5)
     MATCH_MAX_TOP: int = _toml.get("lexicon_match", {}).get("max_top", 20)
 
+    # MinerU 文档解析配置
+    MINERU_ENABLED: bool = _toml.get("mineru", {}).get("enabled", False)
+    MINERU_BASE_URL: str = _toml.get("mineru", {}).get("base_url", "http://10.80.5.25:8000")
+    MINERU_PARSE_ENDPOINT: str = _toml.get("mineru", {}).get("parse_endpoint", "/file_parse")
+    MINERU_TIMEOUT: int = _toml.get("mineru", {}).get("timeout", 120)
+
     class Config:
         env_file = ".env"
         extra = "ignore"

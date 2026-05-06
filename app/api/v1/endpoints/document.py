@@ -67,12 +67,11 @@ async def convert_to_pdf_base64(file: UploadFile) -> str:
 
 
 async def process_document_background(task_id: str, tmp_file: str, orig_name: str, db: AsyncSession):
-    """后台执行文档处理任务。"""
+    """后台执行文档处理任务（VLM 模式：base64 PDF → 视觉大模型）。"""
     global _queue_count
     settings = get_settings()
     start_time = datetime.utcnow()
 
-    # 超出队列上限时直接拒绝
     if _queue_count >= settings.MAX_QUEUE:
         await TaskService.fail_task(db, task_id, "服务繁忙，队列已满，请稍后重试")
         tasks[task_id]["status"] = TaskStatus.to_str(TaskStatus.FAILED)
@@ -98,17 +97,14 @@ async def process_document_background(task_id: str, tmp_file: str, orig_name: st
 
             from app.services.llm_pipeline import run_llm_pipeline
 
-            result = await run_llm_pipeline(filedata, orig_name)
-            
+            result = await run_llm_pipeline(filedata=filedata, orig_name=orig_name)
 
             result["id"] = task_id
 
             elapsed = (datetime.utcnow() - start_time).total_seconds()
 
-            # 完成任务并入库
             await TaskService.complete_task(db, task_id, result, elapsed)
 
-            # 持久化大纲结构
             from app.services.db.syllabus_service import SyllabusService
 
             await SyllabusService.save_full_syllabus(
@@ -139,6 +135,80 @@ async def process_document_background(task_id: str, tmp_file: str, orig_name: st
             pass
 
 
+async def process_document_mineru_background(task_id: str, tmp_file: str, orig_name: str, db: AsyncSession):
+    """后台执行文档处理任务（MinerU 模式：文件 → MinerU 解析 → 纯文本 LLM）。"""
+    global _queue_count
+    settings = get_settings()
+    start_time = datetime.utcnow()
+
+    if _queue_count >= settings.MAX_QUEUE:
+        await TaskService.fail_task(db, task_id, "服务繁忙，队列已满，请稍后重试")
+        tasks[task_id]["status"] = TaskStatus.to_str(TaskStatus.FAILED)
+        tasks[task_id]["error"] = "队列已满"
+        logger.warning(f"⚠️ 任务 {task_id} 被拒绝：队列已满")
+        return
+
+    _queue_count += 1
+    await TaskService.update_task_status(db, task_id, TaskStatus.QUEUED)
+    tasks[task_id]["status"] = TaskStatus.to_str(TaskStatus.QUEUED)
+    logger.info(f"📋 任务 {task_id} 进入队列（MinerU 模式），当前排队数: {_queue_count}")
+
+    try:
+        async with _semaphore:
+            _queue_count -= 1
+            await TaskService.update_task_status(db, task_id, TaskStatus.PROCESSING)
+            tasks[task_id]["status"] = TaskStatus.PROCESSING
+            tasks[task_id]["message"] = "处理中..."
+            tasks[task_id]["started_at"] = datetime.utcnow().isoformat()
+            logger.info(f"🔄 开始处理任务 {task_id}（MinerU 模式）")
+
+            # Step 1: MinerU 解析文档
+            from app.services.mineru_service import parse_file_with_mineru
+
+            markdown_content = await parse_file_with_mineru(tmp_file, filename=orig_name + Path(tmp_file).suffix)
+            logger.info(f"MinerU 解析完成，文本长度: {len(markdown_content)}")
+
+            # Step 2: LLM 提取
+            from app.services.llm_pipeline import run_llm_pipeline
+
+            result = await run_llm_pipeline(markdown_content=markdown_content, orig_name=orig_name)
+
+            result["id"] = task_id
+
+            elapsed = (datetime.utcnow() - start_time).total_seconds()
+
+            await TaskService.complete_task(db, task_id, result, elapsed)
+
+            from app.services.db.syllabus_service import SyllabusService
+
+            await SyllabusService.save_full_syllabus(
+                db,
+                task_id=task_id,
+                course=result.get("course", ""),
+                filename=orig_name,
+                result=result,
+            )
+
+            tasks[task_id]["status"] = TaskStatus.COMPLETED
+            tasks[task_id]["result"] = result
+            tasks[task_id]["completed_at"] = datetime.utcnow().isoformat()
+            logger.info(f"✅ 任务 {task_id} 处理完成（MinerU 模式）")
+
+    except Exception as e:
+        _queue_count = max(0, _queue_count - 1)
+        import traceback
+        error_detail = traceback.format_exc()
+        logger.error(f"❌ 任务 {task_id} 处理失败: {e}\n完整堆栈:\n{error_detail}")
+        await TaskService.fail_task(db, task_id, str(e))
+        tasks[task_id]["status"] = TaskStatus.FAILED
+        tasks[task_id]["error"] = str(e)
+    finally:
+        try:
+            Path(tmp_file).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 @router.post("/process", response_model=TaskResponse, status_code=202)
 async def process_document(
     file: UploadFile = File(...),
@@ -151,15 +221,34 @@ async def process_document(
 
         task_id = f"syllabus-{uuid.uuid4().hex[:24]}"
         orig_name = Path(file.filename).stem
+        settings = get_settings()
 
-        pdf_filedata = await convert_to_pdf_base64(file)
+        if settings.MINERU_ENABLED:
+            # MinerU 模式：保存原始文件供 MinerU 解析
+            file_bytes = await file.read()
+            ext = Path(file.filename).suffix.lower()
+            tmp_fd, tmp_file = tempfile.mkstemp(suffix=ext, prefix=f"task_{task_id}_")
+            import os
+            with os.fdopen(tmp_fd, "wb") as f:
+                f.write(file_bytes)
 
-        # 临时保存编码后的 PDF 内容
-        tmp_fd, tmp_file = tempfile.mkstemp(suffix=".b64", prefix=f"task_{task_id}_")
-        import os
+            background_tasks.add_task(
+                process_document_mineru_background, task_id, tmp_file, orig_name, db
+            )
+            logger.info(f"📝 任务 {task_id} 已提交（MinerU 模式），文件: {file.filename}")
+        else:
+            # VLM 模式：转换为 PDF base64
+            pdf_filedata = await convert_to_pdf_base64(file)
 
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-            f.write(pdf_filedata)
+            tmp_fd, tmp_file = tempfile.mkstemp(suffix=".b64", prefix=f"task_{task_id}_")
+            import os
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                f.write(pdf_filedata)
+
+            background_tasks.add_task(
+                process_document_background, task_id, tmp_file, orig_name, db
+            )
+            logger.info(f"📝 任务 {task_id} 已提交（VLM 模式），文件: {file.filename}")
 
         await TaskService.create_task(
             db,
@@ -176,14 +265,11 @@ async def process_document(
             "created_at": datetime.utcnow().isoformat(),
         }
 
-        background_tasks.add_task(process_document_background, task_id, tmp_file, orig_name, db)
-
-        logger.info(f"📝 任务 {task_id} 已提交，文件: {file.filename}")
-
+        mode_label = "MinerU" if settings.MINERU_ENABLED else "VLM"
         return TaskResponse(
             task_id=task_id,
             status="pending",
-            message="任务已提交，请使用 GET /api/v1/document/status/{task_id} 查询处理进度",
+            message=f"任务已提交（{mode_label}模式），请使用 GET /api/v1/document/status/{task_id} 查询处理进度",
         )
 
     except HTTPException:
@@ -221,7 +307,6 @@ async def get_task_status(task_id: str, db: AsyncSession = Depends(get_db)):
     if task_id in tasks:
         task = tasks[task_id]
 
-        # 通过 task_id 前缀校验任务类型
         if not task_id.startswith("syllabus-"):
             raise NotFoundException(message=f"任务 {task_id} 不是大纲提取任务")
 
