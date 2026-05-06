@@ -32,9 +32,6 @@ class Settings(BaseSettings):
     LLM_MAX_TOKENS: int = _toml.get("llm", {}).get("max_tokens", 8192)
     LLM_TEMPERATURE: float = _toml.get("llm", {}).get("temperature", 0.0)
 
-    # Dolphin OCR 模型路径
-    PARSER_MODEL_PATH: str = ""
-
     # 分块配置
     CHUNK_SIZE: int = _toml.get("chunking", {}).get("chunk_size", 10000)
     CHUNK_OVERLAP: int = _toml.get("chunking", {}).get("overlap", 1000)
@@ -68,9 +65,6 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = _toml.get("logging", {}).get("level", "INFO")
     LOG_FILE: str = _toml.get("logging", {}).get("file", "app.log")
     LOG_FORMAT: str = _toml.get("logging", {}).get("format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-
-    # GPU 配置
-    CUDA_VISIBLE_DEVICES: str = "1"
 
     # Embedding 配置
     EMBEDDING_API_KEY: str = ""
@@ -111,11 +105,6 @@ def get_llm_config() -> dict:
         "max_tokens": settings.LLM_MAX_TOKENS,
         "temperature": settings.LLM_TEMPERATURE,
     }
-
-
-def get_parser_model_path() -> str:
-    """返回 Dolphin OCR 模型路径"""
-    return get_settings().PARSER_MODEL_PATH
 
 
 def get_chunking_config() -> dict:

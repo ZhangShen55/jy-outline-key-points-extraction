@@ -1,8 +1,8 @@
-# LLM直接提取方案设计（替代Dolphin）
+# LLM直接提取方案设计
 
 ## 方案概述
 
-使用大模型（Doubao/Volces）直接提取教学大纲内容，替代原有的Dolphin模型解析流程。
+使用大模型（Doubao/Volces）直接提取教学大纲内容。
 
 ## 整体流程
 
@@ -251,7 +251,7 @@ def merge_results(course_name, chapter_results):
 
 ## 总结
 
-你的新方案是**完全可行的**，而且简化了架构（去掉Dolphin依赖）。关键点：
+你的新方案是**完全可行的**，而且简化了架构。关键点：
 
 1. **LLM直接提取Markdown**：可行，Doubao对中文文档理解能力强
 2. **内存中切分**：无需临时文件，直接用字符串处理

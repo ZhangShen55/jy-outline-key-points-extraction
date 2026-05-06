@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-本文件为 Claude Code (claude.ai/code) 在此代码库中工作时提供指导。
+本文件为 Codex (Codex.ai/code) 在此代码库中工作时提供指导。
 
 ## 项目概述
 
@@ -57,7 +57,7 @@ pip install pydantic-settings
 系统遵循由 `app/services/pipeline.py` 编排的 4 阶段管道：
 
 1. **文档解析** (`app/services/parsers/document_parser.py`)
-   - 将多种格式（PDF、Word、PPT、图片）转换为文本
+   - 将多种格式（PDF、Word、PPT）转换为文本
    - 使用 PyMuPDF 提取 PDF 文本内容
    - 输出：`{filename}_full.txt`
 

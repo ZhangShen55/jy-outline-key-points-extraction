@@ -2,7 +2,6 @@
 文档处理管道服务
 整合自 knowledge_graph/pipeline.py
 """
-import os
 import time
 import asyncio
 from pathlib import Path
@@ -13,7 +12,7 @@ from app.services.parsers.document_parser import parse_document_to_text
 from app.services.parsers.chapter_splitter import extract_chapters_by_traditional_method
 from app.services.parsers.subpoint_splitter import split_subpoints
 from app.services.summarizer.summary_generator import extract_all_modules
-from app.core.config import get_settings, get_parser_model_path
+from app.core.config import get_settings
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -36,9 +35,6 @@ async def run_pipeline(pdf_path: Path, orig_name: str = None) -> dict:
         处理结果字典
     """
     settings = get_settings()
-
-    # 设置 GPU
-    os.environ["CUDA_VISIBLE_DEVICES"] = settings.CUDA_VISIBLE_DEVICES
 
     total_start = time.time()
     success = False
@@ -65,8 +61,7 @@ async def run_pipeline(pdf_path: Path, orig_name: str = None) -> dict:
             full_text = text_file.read_text(encoding="utf-8")
         else:
             logger.info("[1/4] 文档解析 -> 提取纯文本中...")
-            dolphin_path = get_parser_model_path()
-            text_file = Path(await parse_document_to_text(str(pdf_path), dolphin_path, save_dir=out_dir))
+            text_file = Path(await parse_document_to_text(str(pdf_path), save_dir=out_dir))
             full_text = text_file.read_text(encoding="utf-8")
 
         logger.info(f"✅ 文档解析完成，耗时: {time.time() - t1:.2f}s")
