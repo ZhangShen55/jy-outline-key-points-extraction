@@ -26,7 +26,7 @@ class LLMPipeline:
     """
 
     # 章节字典必须包含的字段
-    REQUIRED_CHAPTER_KEYS = {"chapter", "num", "content"}
+    REQUIRED_CHAPTER_KEYS = {"chapter", "content"}
     # content 中合法的模块名
     VALID_CONTENT_CATEGORIES = {"basic", "keypoints", "difficulty", "politics"}
 
@@ -137,6 +137,7 @@ class LLMPipeline:
         course_name = None
         chapters = []
         current_chapter = None
+        chapter_index = 0
 
         for line in lines:
             line = line.strip()
@@ -149,9 +150,11 @@ class LLMPipeline:
             elif line.startswith('## ') and not line.startswith('###'):
                 if current_chapter:
                     chapters.append(current_chapter)
+                chapter_index += 1
                 current_chapter = {
                     'title': line[3:].strip(),
-                    'content': []
+                    'content': [],
+                    'index': chapter_index,
                 }
 
             elif current_chapter and (line.startswith('#') or line):
@@ -248,9 +251,58 @@ class LLMPipeline:
         logger.warning(f"章节 '{chapter_title}' 的 LLM 返回无法归一化，类型: {type(raw).__name__}")
         return None
 
+    @classmethod
+    def _reassign_nums(cls, chapter_data: dict, chapter_index: int) -> None:
+        """后处理重编所有 num 字段，并过滤 lexicon 为空的子项。
+
+        - 章节级 num：使用分章时记录的序号覆盖
+        - 子项级 num：按 basic→keypoints→difficulty→politics 顺序跨模块持续递增
+        - lexicon 为空或不存在的子项将被移除
+        - content 中模块顺序强制为 basic→keypoints→difficulty→politics
+        """
+        chapter_data["num"] = chapter_index
+
+        content = chapter_data.get("content", [])
+        if not isinstance(content, list):
+            return
+
+        # 按 fixed order 合并并过滤
+        merged: Dict[str, list] = {cat: [] for cat in cls.VALID_CONTENT_CATEGORIES}
+        for module in content:
+            if not isinstance(module, dict):
+                continue
+            for cat in cls.VALID_CONTENT_CATEGORIES:
+                items = module.get(cat)
+                if isinstance(items, list):
+                    for item in items:
+                        if isinstance(item, dict):
+                            lexicon = item.get("lexicon")
+                            if isinstance(lexicon, list) and len(lexicon) > 0:
+                                merged[cat].append(item)
+                            else:
+                                logger.warning(
+                                    f"章节 '{chapter_data.get('chapter', '?')}' "
+                                    f"类别 '{cat}' 中子项 '{item.get('title', '?')}' "
+                                    f"lexicon 为空，已移除"
+                                )
+
+        # 跨模块持续递增编号，并按固定顺序重建 content
+        global_num = 0
+        new_content = []
+        for cat in cls.VALID_CONTENT_CATEGORIES:
+            if not merged[cat]:
+                continue
+            for item in merged[cat]:
+                global_num += 1
+                item["num"] = global_num
+            new_content.append({cat: merged[cat]})
+
+        chapter_data["content"] = new_content
+
     async def _process_single_chapter(self, course_name: str, chapter: dict) -> dict:
         """处理单个章节"""
         chapter_title = chapter['title']
+        chapter_index = chapter.get('index', 0)
         chapter_content = '\n'.join(chapter['content'])
 
         prompt = JSON_EXTRACTION_PROMPT_TEMPLATE.format(课程名=course_name)
@@ -276,6 +328,7 @@ class LLMPipeline:
 
         return {
             'chapter_title': chapter_title,
+            'chapter_index': chapter_index,
             'result': normalized,
             'usage': {
                 'prompt_tokens': response.usage.prompt_tokens,
@@ -304,6 +357,9 @@ class LLMPipeline:
             if chapter_data is None or not isinstance(chapter_data, dict):
                 logger.warning(f"跳过章节 '{result.get('chapter_title', '?')}'，归一化失败")
                 continue
+
+            # 用分章序号覆盖章节 num，并重编子项 num
+            self._reassign_nums(chapter_data, result.get('chapter_index', 0))
 
             if 'content' in chapter_data and isinstance(chapter_data['content'], list):
                 for module in chapter_data['content']:
