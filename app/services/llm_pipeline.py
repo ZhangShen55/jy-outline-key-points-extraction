@@ -25,6 +25,11 @@ class LLMPipeline:
     2. MinerU 模式：先用 MinerU 解析文档得到 Markdown，再用纯文本 LLM 提取结构化内容
     """
 
+    # 章节字典必须包含的字段
+    REQUIRED_CHAPTER_KEYS = {"chapter", "num", "content"}
+    # content 中合法的模块名
+    VALID_CONTENT_CATEGORIES = {"basic", "keypoints", "difficulty", "politics"}
+
     def __init__(self):
         settings = get_settings()
         self.client = AsyncOpenAI(
@@ -116,6 +121,8 @@ class LLMPipeline:
 
         content = response.choices[0].message.content
 
+        logger.info(f"LLM 返回内容: {content}")
+
         # 如果 LLM 返回了代码块包裹的内容，提取出来
         code_block_match = re.search(r"```(?:markdown|md)?\s*\n(.*?)```", content, re.DOTALL)
         if code_block_match:
@@ -173,6 +180,74 @@ class LLMPipeline:
 
         return successful_results
 
+    @classmethod
+    def _is_chapter_dict(cls, data: Any) -> bool:
+        """判断 data 是否为合法的章节字典。"""
+        return (isinstance(data, dict)
+                and cls.REQUIRED_CHAPTER_KEYS.issubset(data.keys())
+                and isinstance(data.get("content"), list))
+
+    @classmethod
+    def _normalize_content(cls, content: list) -> list:
+        """归一化 content 列表，过滤掉非法元素，合并同类模块。
+
+        LLM 可能返回以下畸形结构：
+        - content 中包含裸列表（如 lexicon 列表）而非 dict
+        - content 中包含嵌套列表（如 [[item1, item2], {basic: [...]}]）
+        - content 中同一类别出现多次
+        """
+        if not isinstance(content, list):
+            return []
+
+        merged: Dict[str, list] = {cat: [] for cat in cls.VALID_CONTENT_CATEGORIES}
+
+        for item in content:
+            if isinstance(item, dict):
+                for key, value in item.items():
+                    if key in cls.VALID_CONTENT_CATEGORIES and isinstance(value, list):
+                        merged[key].extend(value)
+            # 跳过非 dict 元素（裸列表、字符串等）
+
+        # 重建 content 列表，仅保留非空模块
+        result = []
+        for cat in cls.VALID_CONTENT_CATEGORIES:
+            if merged[cat]:
+                result.append({cat: merged[cat]})
+        return result
+
+    @classmethod
+    def _normalize_chapter_result(cls, raw: Any, chapter_title: str) -> Optional[dict]:
+        """将 LLM 返回的原始 JSON 归一化为合法的章节字典。
+
+        处理的畸形情况：
+        1. 直接返回合法章节字典 → 原样返回（归一化 content）
+        2. 返回列表，其中包含合法章节字典 → 提取字典
+        3. 嵌套列表 → 递归查找合法章节字典
+        4. 无法修复 → 返回 None
+        """
+        # 情况 1：已经是合法章节字典
+        if cls._is_chapter_dict(raw):
+            raw["content"] = cls._normalize_content(raw["content"])
+            return raw
+
+        # 情况 2 & 3：列表中查找合法章节字典
+        if isinstance(raw, list):
+            # 先在顶层找
+            for item in raw:
+                if cls._is_chapter_dict(item):
+                    item["content"] = cls._normalize_content(item["content"])
+                    return item
+
+            # 递归查找（处理嵌套列表）
+            for item in raw:
+                if isinstance(item, list):
+                    result = cls._normalize_chapter_result(item, chapter_title)
+                    if result is not None:
+                        return result
+
+        logger.warning(f"章节 '{chapter_title}' 的 LLM 返回无法归一化，类型: {type(raw).__name__}")
+        return None
+
     async def _process_single_chapter(self, course_name: str, chapter: dict) -> dict:
         """处理单个章节"""
         chapter_title = chapter['title']
@@ -191,11 +266,17 @@ class LLMPipeline:
             timeout=300
         )
 
-        result_json = json.loads(json_repair.repair_json(response.choices[0].message.content))
+        raw_json = json.loads(json_repair.repair_json(response.choices[0].message.content))
+
+        # 归一化 LLM 返回的 JSON，确保结构符合预期
+        normalized = self._normalize_chapter_result(raw_json, chapter_title)
+
+        if normalized is None:
+            logger.error(f"章节 '{chapter_title}' LLM 返回无法归一化，原始数据: {json.dumps(raw_json, ensure_ascii=False)[:500]}")
 
         return {
             'chapter_title': chapter_title,
-            'result': result_json,
+            'result': normalized,
             'usage': {
                 'prompt_tokens': response.usage.prompt_tokens,
                 'completion_tokens': response.usage.completion_tokens,
@@ -219,12 +300,19 @@ class LLMPipeline:
             total_prompt_tokens += usage['prompt_tokens']
             total_completion_tokens += usage['completion_tokens']
 
-            if 'content' in chapter_data:
+            # 跳过归一化失败的章节
+            if chapter_data is None or not isinstance(chapter_data, dict):
+                logger.warning(f"跳过章节 '{result.get('chapter_title', '?')}'，归一化失败")
+                continue
+
+            if 'content' in chapter_data and isinstance(chapter_data['content'], list):
                 for module in chapter_data['content']:
+                    if not isinstance(module, dict):
+                        continue
                     for module_name, items in module.items():
                         if isinstance(items, list):
                             for item in items:
-                                if 'lexicon' in item and isinstance(item['lexicon'], list):
+                                if isinstance(item, dict) and 'lexicon' in item and isinstance(item['lexicon'], list):
                                     unique_lexicons = []
                                     for lex in item['lexicon']:
                                         if lex not in seen_lexicons:

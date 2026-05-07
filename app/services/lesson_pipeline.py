@@ -388,11 +388,20 @@ def _compute_coverage(
         for ms in m.get("matched_segments", []):
             matched_seg_ids.add(ms.get("seg_id", ""))
 
-    # 按类别和 seg_id 排序
-    valid_matches.sort(key=lambda m: (
-        CAT_ORDER.get(m.get("category", ""), 99),
-        m.get("matched_segments", [{}])[0].get("seg_id", "") if m.get("matched_segments") else "",
-    ))
+    # 按 chapter_num 递增，同 chapter_num 内按 bg 时间递增
+    def _sort_key(m: dict):
+        chapter_num = m.get("chapter_num", 0) or 0
+        segments = m.get("matched_segments", [])
+        bg = segments[0].get("bg", 0) if segments else 0
+        # bg 可能为毫秒数(int)或时间字符串(str)，统一转数值排序
+        if isinstance(bg, str):
+            try:
+                bg = float(bg)
+            except (ValueError, TypeError):
+                bg = 0
+        return (chapter_num, bg)
+
+    valid_matches.sort(key=_sort_key)
 
     # 按固定顺序输出分类覆盖率
     category_coverage = {}
