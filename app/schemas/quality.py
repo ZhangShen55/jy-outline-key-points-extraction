@@ -48,6 +48,8 @@ class QualityDataIngestionRequest(BaseModel):
     lesson_index_in_week: int = Field(..., ge=1, description="周内课程序号（必填）")
     lesson_index_global: int = Field(..., ge=1, description="学期全局课程序号（必填）")
     avg_head_up_rate: Optional[float] = Field(None, ge=0, le=1, description="平均抬头率，建议0~1")
+    teacher_weight: float = Field(0.6, ge=0, description="教师提问权重（默认0.6）")
+    ocr_weight: float = Field(0.4, ge=0, description="课件内容权重（默认0.4）")
 
     asr_data: List[AsrSegment] = Field(default_factory=list, description="ASR切片列表")
     ocr_data: List[OcrSegment] = Field(default_factory=list, description="OCR切片列表")
@@ -80,4 +82,3 @@ class QualityTaskCancelRequest(BaseModel):
     """取消任务请求。"""
 
     task_id: str = Field(..., description="任务ID")
-

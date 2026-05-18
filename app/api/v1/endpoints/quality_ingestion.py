@@ -28,7 +28,13 @@ async def data_ingestion(
     trace_id = uuid.uuid4().hex
     try:
         data = await ingest_data(db, request)
-        background_tasks.add_task(run_lesson_analysis_background, request.course_id, request.lesson_id)
+        background_tasks.add_task(
+            run_lesson_analysis_background,
+            request.course_id,
+            request.lesson_id,
+            request.teacher_weight,
+            request.ocr_weight,
+        )
         return QualityBaseResponse(
             code=20000,
             message=(
