@@ -759,6 +759,98 @@ def _remove_oral_fillers(text: str) -> str:
     return t
 
 
+def _collapse_adjacent_repetitions(text: str, max_unit_len: int = 6) -> str:
+    s = _normalize_text(text)
+    if not s:
+        return s
+    n = len(s)
+    i = 0
+    out: List[str] = []
+    while i < n:
+        best_len = 0
+        best_repeat = 1
+        max_l = min(max_unit_len, n - i)
+        for l in range(max_l, 0, -1):
+            unit = s[i : i + l]
+            if not unit.strip():
+                continue
+            repeat = 1
+            j = i + l
+            while j + l <= n and s[j : j + l] == unit and repeat < 8:
+                repeat += 1
+                j += l
+            if repeat > 1:
+                best_len = l
+                best_repeat = repeat
+                break
+        if best_repeat > 1 and best_len > 0:
+            out.append(s[i : i + best_len])
+            i += best_len * best_repeat
+            continue
+        out.append(s[i])
+        i += 1
+    return "".join(out)
+
+
+def _collapse_stutter_patterns(text: str) -> str:
+    t = _normalize_text(text)
+    if not t:
+        return t
+    # 口吃重复：如“一个一一个” / “构构架” / “我我”
+    t = re.sub(r"([\u4e00-\u9fa5]{1,4})[一-]\1", r"\1", t)
+    t = re.sub(r"([\u4e00-\u9fa5]{1,4})\1{1,}", r"\1", t)
+    # 字母数字短串重复
+    t = re.sub(r"([A-Za-z0-9]{1,6})\1{1,}", r"\1", t)
+    return t
+
+
+def _apply_homophone_pairs(
+    text: str,
+    homophone_pairs: Optional[List[Dict[str, str]]] = None,
+    core_terms: Optional[List[str]] = None,
+) -> str:
+    t = _normalize_text(text)
+    if not t:
+        return t
+    pairs = homophone_pairs or []
+    terms_set = set(_uniq_non_empty([str(x) for x in (core_terms or [])], max_items=200))
+    safe_pairs: List[Tuple[str, str]] = []
+    for pair in pairs:
+        if not isinstance(pair, dict):
+            continue
+        wrong = _normalize_text(pair.get("wrong", ""))
+        correct = _normalize_text(pair.get("correct", ""))
+        if not wrong or not correct or wrong == correct:
+            continue
+        if terms_set and correct not in terms_set:
+            # 仅优先接受词表内候选，避免过拟合替换
+            continue
+        safe_pairs.append((wrong, correct))
+    safe_pairs.sort(key=lambda x: len(x[0]), reverse=True)
+    for wrong, correct in safe_pairs:
+        if wrong in t:
+            t = t.replace(wrong, correct)
+    return t
+
+
+def _finalize_corrected_text(
+    text: str,
+    *,
+    core_terms: Optional[List[str]] = None,
+    homophone_pairs: Optional[List[Dict[str, str]]] = None,
+) -> str:
+    t = _normalize_text(text)
+    if not t:
+        return t
+    t = _apply_homophone_pairs(t, homophone_pairs=homophone_pairs, core_terms=core_terms)
+    t = _remove_oral_fillers(t)
+    t = _collapse_stutter_patterns(t)
+    t = _collapse_adjacent_repetitions(t, max_unit_len=6)
+    t = _remove_oral_fillers(t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
 def _normalize_distribution(dist: Dict[str, float]) -> Dict[str, int]:
     keys = ["l1", "l2", "l3", "l4", "l5", "l6"]
     raw = [max(0.0, float(dist.get(k, 0.0))) for k in keys]
@@ -1395,10 +1487,17 @@ async def _correct_asr_segment(
         item_id = str(x.get("item_id", "")).strip()
         if item_id not in expected:
             continue
-        corrected_text = _normalize_text(x.get("corrected_text", ""))
-        corrected_text = _remove_oral_fillers(corrected_text) or corrected_text
+        corrected_text = _finalize_corrected_text(
+            _normalize_text(x.get("corrected_text", "")),
+            core_terms=core_terms,
+            homophone_pairs=homophone_pairs,
+        )
         if not _asr_text_change_is_reasonable(expected[item_id].get("text", ""), corrected_text):
-            corrected_text = _normalize_text(expected[item_id].get("text", ""))
+            corrected_text = _finalize_corrected_text(
+                _normalize_text(expected[item_id].get("text", "")),
+                core_terms=core_terms,
+                homophone_pairs=homophone_pairs,
+            )
         corrected_role = _normalize_role_label(x.get("corrected_role", "unknown"))
         parsed[item_id] = {
             "item_id": item_id,
@@ -1601,6 +1700,7 @@ async def _postprocess_asr_data_with_llm(
         seg = segments[seg_idx]
         sid = seg["segment_id"]
         current_summary = summaries.get(sid, {}).get("summary", "")
+        ocr_terms = ocr_terms_map.get(sid, {})
         segment_summaries_final.append(
             {
                 "segment_id": sid,
@@ -1624,10 +1724,14 @@ async def _postprocess_asr_data_with_llm(
             elif role_out not in _ASR_ROLE_SET or role_out == "unknown":
                 role_out = role_orig
             text_out = _remove_oral_fillers(
-                _normalize_text(corrected_item.get("corrected_text", orig_item.get("text", "")))
+                _finalize_corrected_text(
+                    _normalize_text(corrected_item.get("corrected_text", orig_item.get("text", ""))),
+                    core_terms=list(ocr_terms.get("core_terms", [])[:20]),
+                    homophone_pairs=list(ocr_terms.get("homophone_pairs", [])[:30]),
+                )
             )
             if not text_out:
-                text_out = _normalize_text(orig_item.get("text", ""))
+                text_out = _finalize_corrected_text(_normalize_text(orig_item.get("text", "")))
             corrected_by_idx[int(orig_item["original_idx"])] = {
                 "bg": _safe_float(orig_item.get("bg"), 0.0),
                 "ed": _safe_float(orig_item.get("ed"), _safe_float(orig_item.get("bg"), 0.0)),
@@ -1641,7 +1745,7 @@ async def _postprocess_asr_data_with_llm(
     for i, orig in enumerate(asr_filtered):
         fixed = corrected_by_idx.get(i)
         if not fixed:
-            fallback_text = _remove_oral_fillers(_normalize_text(orig.get("text", "")))
+            fallback_text = _finalize_corrected_text(_normalize_text(orig.get("text", "")))
             if not fallback_text:
                 fallback_text = _normalize_text(orig.get("text", ""))
             fixed = {
