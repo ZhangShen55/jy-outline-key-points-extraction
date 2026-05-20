@@ -34,6 +34,23 @@ from app.prompts.activity_mix import (
     ACTIVITY_VERIFY_SYSTEM,
     ACTIVITY_VERIFY_USER_TEMPLATE,
 )
+from app.prompts.asr_postprocess import (
+    ASR_BOUNDARY_HEAD_OUTPUT_SCHEMA,
+    ASR_BOUNDARY_HEAD_SYSTEM,
+    ASR_BOUNDARY_HEAD_USER_TEMPLATE,
+    ASR_BOUNDARY_TAIL_OUTPUT_SCHEMA,
+    ASR_BOUNDARY_TAIL_SYSTEM,
+    ASR_BOUNDARY_TAIL_USER_TEMPLATE,
+    ASR_CORRECT_OUTPUT_SCHEMA,
+    ASR_CORRECT_SYSTEM,
+    ASR_CORRECT_USER_TEMPLATE,
+    ASR_SEGMENT_SUMMARY_OUTPUT_SCHEMA,
+    ASR_SEGMENT_SUMMARY_SYSTEM,
+    ASR_SEGMENT_SUMMARY_USER_TEMPLATE,
+    OCR_TERMS_OUTPUT_SCHEMA,
+    OCR_TERMS_SYSTEM,
+    OCR_TERMS_USER_TEMPLATE,
+)
 from app.prompts.bloom_v2 import (
     BLOOM_INTERPRET_OUTPUT_SCHEMA,
     BLOOM_INTERPRET_SYSTEM,
@@ -128,6 +145,28 @@ _ACTIVITY_LABELS_ZH = {
     "teacher_student_interaction": "师生互动",
     "experiment_explanation": "实验讲解",
 }
+_ASR_ROLE_SET = {"teacher", "student", "unknown"}
+
+
+def _llm_json_schema_enabled_by_default() -> bool:
+    settings = get_settings()
+    base_url = str(getattr(settings, "LLM_BASE_URL", "") or "").lower()
+    # SiliconFlow 在 json_schema 模式下延迟明显偏高，默认关闭 schema 走纯 JSON 解析。
+    if "siliconflow" in base_url:
+        return False
+    return True
+
+
+def _llm_extra_body() -> Optional[Dict[str, Any]]:
+    settings = get_settings()
+    disable_thinking = bool(getattr(settings, "LLM_DISABLE_THINKING", True))
+    if not disable_thinking:
+        return None
+    model = str(getattr(settings, "LLM_MODEL", "") or "").lower()
+    # Qwen3 系列在部分平台默认开启 thinking，会明显拉高时延。
+    if "qwen3" in model:
+        return {"enable_thinking": False}
+    return None
 
 
 def _get_llm_client() -> AsyncOpenAI:
@@ -150,6 +189,573 @@ def _chunked(items: List[Dict[str, Any]], size: int) -> List[List[Dict[str, Any]
 def _normalize_text(text: str) -> str:
     t = str(text or "").strip()
     t = re.sub(r"\s+", " ", t)
+    return t
+
+
+def _prompt_second_int(value: Any) -> int:
+    return _safe_int(round(_safe_float(value, 0.0)), 0)
+
+
+_SHORT_ORAL_FILLER_SET = {
+    "嗯", "啊", "好", "呃", "额", "哦", "噢", "诶", "欸", "哎", "唉", "哈", "呀",
+    "吧", "呢", "嘛", "呗", "嗯嗯", "啊啊", "呃呃", "哦哦", "哎呀",
+    "是吧", "好吧", "行吧", "好的", "就是", "那个", "然后",
+    # docs/asr_two_char_oral_fillers.txt
+    "好好", "对对", "是啊", "对啊", "对哦", "嗯对", "嗯好", "不不", "我去", "看嗯", "特特",
+}
+_MERGE_QUESTION_TAIL_SET = {"对吧", "对吗", "是吗", "是吧"}
+
+
+def _effective_text_len(text: str) -> int:
+    t = _normalize_text(text)
+    if not t:
+        return 0
+    return len(re.findall(r"[\u4e00-\u9fa5A-Za-z0-9]", t))
+
+
+def _strip_non_cjk_alnum(text: str) -> str:
+    return "".join(re.findall(r"[\u4e00-\u9fa5A-Za-z0-9]", _normalize_text(text)))
+
+
+def _should_delete_short_oral_asr_item(text: str, max_len: int) -> bool:
+    if max_len < 0:
+        return False
+    compact = _strip_non_cjk_alnum(text)
+    if not compact:
+        return False
+    if len(compact) > max_len:
+        return False
+    if compact in _MERGE_QUESTION_TAIL_SET:
+        return False
+    return compact in _SHORT_ORAL_FILLER_SET
+
+
+def _merge_question_tail_segments(asr_segments: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
+    """将“对吧?/对吗?/是吗?/是吧?”并到上一条ASR，保留提问语气。"""
+    if not asr_segments:
+        return [], 0
+    merged: List[Dict[str, Any]] = []
+    merged_count = 0
+    for seg in asr_segments:
+        cur = dict(seg)
+        text = _normalize_text(cur.get("text", ""))
+        compact = _strip_non_cjk_alnum(text)
+        has_qmark = bool(re.search(r"[？?]$", text))
+        if merged and has_qmark and compact in _MERGE_QUESTION_TAIL_SET:
+            prev = merged[-1]
+            prev_text = _normalize_text(prev.get("text", ""))
+            tail = f"{compact}？"
+            if prev_text:
+                if re.search(r"[，,、；;：:。.!！?？]$", prev_text):
+                    prev_text = re.sub(r"[，,、；;：:。.!！?？]+$", "", prev_text).strip()
+                prev["text"] = f"{prev_text}{tail}"
+            else:
+                prev["text"] = tail
+            prev["ed"] = _safe_float(cur.get("ed"), _safe_float(prev.get("ed"), _safe_float(prev.get("bg"), 0.0)))
+            merged_count += 1
+            continue
+        merged.append(cur)
+    return merged, merged_count
+
+
+def _build_boundary_window_items(
+    asr_segments: List[Dict[str, Any]],
+    start_sec: float,
+    end_sec: float,
+    *,
+    limit: int = 180,
+) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    for idx, seg in enumerate(asr_segments):
+        bg = _safe_float(seg.get("bg"), 0.0)
+        ed = _safe_float(seg.get("ed"), bg)
+        if ed < start_sec or bg > end_sec:
+            continue
+        text = _normalize_text(seg.get("text", ""))
+        if not text:
+            continue
+        items.append(
+            {
+                "idx": idx,
+                "bg": _prompt_second_int(bg),
+                "ed": _prompt_second_int(ed),
+                "role": _normalize_role_label(seg.get("role", "unknown")),
+                "text": text[:100],
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _normalize_boundary_reason_tags(raw_tags: Any) -> List[str]:
+    if not isinstance(raw_tags, list):
+        return []
+    mapped: List[str] = []
+    for tag in raw_tags:
+        t = _normalize_text(tag).lower().replace(" ", "_").replace("-", "_")
+        if not t:
+            continue
+        if "开始" in t:
+            t = "teaching_start"
+        elif "结束" in t:
+            t = "teaching_end"
+        elif "总结" in t:
+            t = "summary"
+        elif "作业" in t:
+            t = "homework"
+        elif "寒暄" in t:
+            t = "greeting"
+        elif "调试" in t or "设备" in t:
+            t = "device_debug"
+        elif "闲聊" in t:
+            t = "chatter"
+        elif "噪声" in t or "杂音" in t:
+            t = "noise"
+        elif "过渡" in t:
+            t = "transition"
+        mapped.append(t[:32])
+    return _uniq_non_empty(mapped, max_items=8)
+
+
+def _extract_valid_item_indices(raw_indices: Any, valid_idx_set: set[int], max_items: int = 6) -> List[int]:
+    if not isinstance(raw_indices, list):
+        return []
+    out: List[int] = []
+    for idx in raw_indices:
+        i = _safe_int(idx, -1)
+        if i not in valid_idx_set or i in out:
+            continue
+        out.append(i)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _is_informative_asr_text(text: str) -> bool:
+    compact = _strip_non_cjk_alnum(text)
+    if not compact:
+        return False
+    if len(compact) <= 2 and compact in _SHORT_ORAL_FILLER_SET:
+        return False
+    if len(compact) < 4:
+        return False
+    if re.fullmatch(r"\d+", compact):
+        return False
+    return True
+
+
+def _boundary_support_ratio(
+    asr_segments: List[Dict[str, Any]],
+    *,
+    anchor_idx: int,
+    is_head: bool,
+    span: int = 6,
+) -> float:
+    if anchor_idx < 0 or anchor_idx >= len(asr_segments):
+        return 0.0
+    n = len(asr_segments)
+    step = max(1, span)
+    if is_head:
+        idx_list = list(range(anchor_idx, min(n, anchor_idx + step)))
+    else:
+        idx_list = list(range(max(0, anchor_idx - step + 1), anchor_idx + 1))
+    if not idx_list:
+        return 0.0
+    informative = 0
+    for idx in idx_list:
+        text = _normalize_text(asr_segments[idx].get("text", ""))
+        if _is_informative_asr_text(text):
+            informative += 1
+    return informative / len(idx_list)
+
+
+def _compute_boundary_final_confidence(
+    *,
+    model_confidence: float,
+    anchor_valid: bool,
+    evidence_count: int,
+    reason_tags: List[str],
+    support_ratio: float,
+    insufficient_evidence: bool,
+    is_head: bool,
+) -> float:
+    score = 0.0
+    score += 0.45 * max(0.0, min(1.0, model_confidence))
+    if anchor_valid:
+        score += 0.2
+    score += min(0.15, max(0, evidence_count) * 0.04)
+    score += 0.15 * max(0.0, min(1.0, support_ratio))
+    if is_head:
+        if "teaching_start" in reason_tags:
+            score += 0.1
+    else:
+        if "teaching_end" in reason_tags or "summary" in reason_tags:
+            score += 0.1
+    if insufficient_evidence:
+        score *= 0.6
+    return max(0.0, min(1.0, score))
+
+
+async def _detect_lesson_boundaries_with_llm(
+    *,
+    course_name: str,
+    asr_segments: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not asr_segments:
+        return {
+            "applied": False,
+            "start_bg_sec": None,
+            "end_ed_sec": None,
+            "head_trim_count": 0,
+            "tail_trim_count": 0,
+            "reason": "empty_asr",
+        }
+
+    min_bg = min((_safe_float(x.get("bg"), 0.0) for x in asr_segments), default=0.0)
+    max_ed = max((_safe_float(x.get("ed"), 0.0) for x in asr_segments), default=0.0)
+    if max_ed - min_bg <= 600:
+        return {
+            "applied": False,
+            "start_bg_sec": None,
+            "end_ed_sec": None,
+            "head_trim_count": 0,
+            "tail_trim_count": 0,
+            "reason": "duration_too_short",
+        }
+
+    head_items = _build_boundary_window_items(asr_segments, min_bg, min_bg + 300.0)
+    tail_items = _build_boundary_window_items(asr_segments, max(min_bg, max_ed - 300.0), max_ed)
+    if not head_items or not tail_items:
+        return {
+            "applied": False,
+            "start_bg_sec": None,
+            "end_ed_sec": None,
+            "head_trim_count": 0,
+            "tail_trim_count": 0,
+            "reason": "window_items_empty",
+        }
+
+    head_prompt = ASR_BOUNDARY_HEAD_USER_TEMPLATE.format(
+        course_name=course_name,
+        head_items_json=json.dumps(head_items, ensure_ascii=False),
+    )
+    tail_prompt = ASR_BOUNDARY_TAIL_USER_TEMPLATE.format(
+        course_name=course_name,
+        tail_items_json=json.dumps(tail_items, ensure_ascii=False),
+    )
+
+    head_resp, tail_resp = await asyncio.gather(
+        _call_llm_json(
+            system_prompt=ASR_BOUNDARY_HEAD_SYSTEM,
+            user_prompt=head_prompt,
+            response_schema=ASR_BOUNDARY_HEAD_OUTPUT_SCHEMA,
+            max_tokens=1024,
+            temperature=0.0,
+            use_schema=False,
+            timeout_sec=60,
+        ),
+        _call_llm_json(
+            system_prompt=ASR_BOUNDARY_TAIL_SYSTEM,
+            user_prompt=tail_prompt,
+            response_schema=ASR_BOUNDARY_TAIL_OUTPUT_SCHEMA,
+            max_tokens=1024,
+            temperature=0.0,
+            use_schema=False,
+            timeout_sec=60,
+        ),
+    )
+    head_resp_safe = head_resp if isinstance(head_resp, dict) else None
+    tail_resp_safe = tail_resp if isinstance(tail_resp, dict) else None
+    head_raw_text: Optional[str] = None
+    tail_raw_text: Optional[str] = None
+    if head_resp_safe is None or tail_resp_safe is None:
+        raw_calls = []
+        if head_resp_safe is None:
+            raw_calls.append(
+                _call_llm_raw_text(
+                    system_prompt=ASR_BOUNDARY_HEAD_SYSTEM,
+                    user_prompt=head_prompt,
+                    max_tokens=1024,
+                    temperature=0.0,
+                    timeout_sec=45,
+                )
+            )
+        else:
+            raw_calls.append(asyncio.sleep(0, result=None))
+        if tail_resp_safe is None:
+            raw_calls.append(
+                _call_llm_raw_text(
+                    system_prompt=ASR_BOUNDARY_TAIL_SYSTEM,
+                    user_prompt=tail_prompt,
+                    max_tokens=1024,
+                    temperature=0.0,
+                    timeout_sec=45,
+                )
+            )
+        else:
+            raw_calls.append(asyncio.sleep(0, result=None))
+        raw_head, raw_tail = await asyncio.gather(*raw_calls)
+        if head_resp_safe is None:
+            head_raw_text = _clip_text(str(raw_head or ""), 4000) or None
+        if tail_resp_safe is None:
+            tail_raw_text = _clip_text(str(raw_tail or ""), 4000) or None
+
+    head_idx_map = {int(x["idx"]): x for x in head_items}
+    tail_idx_map = {int(x["idx"]): x for x in tail_items}
+    head_idx_set = set(head_idx_map.keys())
+    tail_idx_set = set(tail_idx_map.keys())
+
+    head_anchor_idx = _safe_int((head_resp_safe or {}).get("anchor_item_idx"), -1)
+    tail_anchor_idx = _safe_int((tail_resp_safe or {}).get("anchor_item_idx"), -1)
+    head_anchor_valid = head_anchor_idx in head_idx_set
+    tail_anchor_valid = tail_anchor_idx in tail_idx_set
+
+    head_model_conf = _safe_float(
+        (head_resp_safe or {}).get("model_confidence"),
+        _safe_float((head_resp_safe or {}).get("confidence"), 0.0),
+    )
+    tail_model_conf = _safe_float(
+        (tail_resp_safe or {}).get("model_confidence"),
+        _safe_float((tail_resp_safe or {}).get("confidence"), 0.0),
+    )
+    head_insufficient = bool((head_resp_safe or {}).get("insufficient_evidence", False))
+    tail_insufficient = bool((tail_resp_safe or {}).get("insufficient_evidence", False))
+
+    head_reason_tags = _normalize_boundary_reason_tags((head_resp_safe or {}).get("reason_tags"))
+    tail_reason_tags = _normalize_boundary_reason_tags((tail_resp_safe or {}).get("reason_tags"))
+    head_evidence_indices = _extract_valid_item_indices(
+        (head_resp_safe or {}).get("evidence_item_indices"),
+        head_idx_set,
+        max_items=6,
+    )
+    tail_evidence_indices = _extract_valid_item_indices(
+        (tail_resp_safe or {}).get("evidence_item_indices"),
+        tail_idx_set,
+        max_items=6,
+    )
+
+    start_bg_from_anchor = _safe_float((head_idx_map.get(head_anchor_idx) or {}).get("bg"), min_bg)
+    end_ed_from_anchor = _safe_float((tail_idx_map.get(tail_anchor_idx) or {}).get("ed"), max_ed)
+    start_bg_from_field = _safe_float((head_resp_safe or {}).get("start_bg_sec"), start_bg_from_anchor)
+    end_ed_from_field = _safe_float((tail_resp_safe or {}).get("end_ed_sec"), end_ed_from_anchor)
+
+    start_bg_candidate = start_bg_from_anchor if head_anchor_valid else start_bg_from_field
+    end_ed_candidate = end_ed_from_anchor if tail_anchor_valid else end_ed_from_field
+
+    head_support_ratio = _boundary_support_ratio(
+        asr_segments,
+        anchor_idx=head_anchor_idx,
+        is_head=True,
+        span=6,
+    )
+    tail_support_ratio = _boundary_support_ratio(
+        asr_segments,
+        anchor_idx=tail_anchor_idx,
+        is_head=False,
+        span=6,
+    )
+    head_final_conf = _compute_boundary_final_confidence(
+        model_confidence=head_model_conf,
+        anchor_valid=head_anchor_valid,
+        evidence_count=len(head_evidence_indices),
+        reason_tags=head_reason_tags,
+        support_ratio=head_support_ratio,
+        insufficient_evidence=head_insufficient,
+        is_head=True,
+    )
+    tail_final_conf = _compute_boundary_final_confidence(
+        model_confidence=tail_model_conf,
+        anchor_valid=tail_anchor_valid,
+        evidence_count=len(tail_evidence_indices),
+        reason_tags=tail_reason_tags,
+        support_ratio=tail_support_ratio,
+        insufficient_evidence=tail_insufficient,
+        is_head=False,
+    )
+
+    trust_head = (not head_insufficient) and head_final_conf >= 0.58
+    trust_tail = (not tail_insufficient) and tail_final_conf >= 0.58
+    if not trust_head and not trust_tail:
+        return {
+            "applied": False,
+            "start_bg_sec": None,
+            "end_ed_sec": None,
+            "head_trim_count": 0,
+            "tail_trim_count": 0,
+            "reason": "low_final_confidence",
+            "head_model_confidence": round(head_model_conf, 4),
+            "tail_model_confidence": round(tail_model_conf, 4),
+            "head_final_confidence": round(head_final_conf, 4),
+            "tail_final_confidence": round(tail_final_conf, 4),
+            "head_confidence": round(head_final_conf, 4),
+            "tail_confidence": round(tail_final_conf, 4),
+            "head_anchor_item_idx": head_anchor_idx if head_anchor_valid else None,
+            "tail_anchor_item_idx": tail_anchor_idx if tail_anchor_valid else None,
+            "head_evidence_item_indices": head_evidence_indices,
+            "tail_evidence_item_indices": tail_evidence_indices,
+            "head_reason_tags": head_reason_tags,
+            "tail_reason_tags": tail_reason_tags,
+            "head_insufficient_evidence": head_insufficient,
+            "tail_insufficient_evidence": tail_insufficient,
+            "head_support_ratio": round(head_support_ratio, 4),
+            "tail_support_ratio": round(tail_support_ratio, 4),
+            "head_reason": _normalize_text((head_resp_safe or {}).get("reason", ""))[:120],
+            "tail_reason": _normalize_text((tail_resp_safe or {}).get("reason", ""))[:120],
+            "head_llm_response": head_resp_safe,
+            "tail_llm_response": tail_resp_safe,
+            "head_llm_response_valid": bool(head_resp_safe),
+            "tail_llm_response_valid": bool(tail_resp_safe),
+            "head_llm_raw_text": head_raw_text,
+            "tail_llm_raw_text": tail_raw_text,
+        }
+
+    start_bg = max(min_bg, min(start_bg_candidate, min_bg + 300.0)) if trust_head else min_bg
+    end_ed = min(max_ed, max(end_ed_candidate, max_ed - 300.0)) if trust_tail else max_ed
+    if end_ed <= start_bg:
+        return {
+            "applied": False,
+            "start_bg_sec": None,
+            "end_ed_sec": None,
+            "head_trim_count": 0,
+            "tail_trim_count": 0,
+            "reason": "invalid_boundary_after_clamp",
+            "head_model_confidence": round(head_model_conf, 4),
+            "tail_model_confidence": round(tail_model_conf, 4),
+            "head_final_confidence": round(head_final_conf, 4),
+            "tail_final_confidence": round(tail_final_conf, 4),
+            "head_confidence": round(head_final_conf, 4),
+            "tail_confidence": round(tail_final_conf, 4),
+            "head_llm_response": head_resp_safe,
+            "tail_llm_response": tail_resp_safe,
+            "head_llm_response_valid": bool(head_resp_safe),
+            "tail_llm_response_valid": bool(tail_resp_safe),
+            "head_llm_raw_text": head_raw_text,
+            "tail_llm_raw_text": tail_raw_text,
+        }
+
+    trimmed: List[Dict[str, Any]] = []
+    head_trim_count = 0
+    tail_trim_count = 0
+    for seg in asr_segments:
+        bg = _safe_float(seg.get("bg"), 0.0)
+        ed = _safe_float(seg.get("ed"), bg)
+        if ed < start_bg:
+            head_trim_count += 1
+            continue
+        if bg > end_ed:
+            tail_trim_count += 1
+            continue
+        trimmed.append(seg)
+
+    if not trimmed:
+        return {
+            "applied": False,
+            "start_bg_sec": None,
+            "end_ed_sec": None,
+            "head_trim_count": 0,
+            "tail_trim_count": 0,
+            "reason": "trimmed_empty",
+        }
+
+    if len(trimmed) >= 2:
+        trimmed_min_bg = min((_safe_float(x.get("bg"), 0.0) for x in trimmed), default=0.0)
+        trimmed_max_ed = max((_safe_float(x.get("ed"), 0.0) for x in trimmed), default=0.0)
+        if trimmed_max_ed - trimmed_min_bg < 600:
+            return {
+                "applied": False,
+                "start_bg_sec": None,
+                "end_ed_sec": None,
+                "head_trim_count": 0,
+                "tail_trim_count": 0,
+                "reason": "trimmed_duration_too_short",
+                "head_model_confidence": round(head_model_conf, 4),
+                "tail_model_confidence": round(tail_model_conf, 4),
+                "head_final_confidence": round(head_final_conf, 4),
+                "tail_final_confidence": round(tail_final_conf, 4),
+                "head_confidence": round(head_final_conf, 4),
+                "tail_confidence": round(tail_final_conf, 4),
+                "head_llm_response": head_resp_safe,
+                "tail_llm_response": tail_resp_safe,
+                "head_llm_response_valid": bool(head_resp_safe),
+                "tail_llm_response_valid": bool(tail_resp_safe),
+                "head_llm_raw_text": head_raw_text,
+                "tail_llm_raw_text": tail_raw_text,
+            }
+
+    return {
+        "applied": True,
+        "start_bg_sec": round(start_bg, 3),
+        "end_ed_sec": round(end_ed, 3),
+        "head_trim_count": head_trim_count,
+        "tail_trim_count": tail_trim_count,
+        "head_model_confidence": round(head_model_conf, 4),
+        "tail_model_confidence": round(tail_model_conf, 4),
+        "head_final_confidence": round(head_final_conf, 4),
+        "tail_final_confidence": round(tail_final_conf, 4),
+        "head_confidence": round(head_final_conf, 4),
+        "tail_confidence": round(tail_final_conf, 4),
+        "head_anchor_item_idx": head_anchor_idx if head_anchor_valid else None,
+        "tail_anchor_item_idx": tail_anchor_idx if tail_anchor_valid else None,
+        "head_evidence_item_indices": head_evidence_indices,
+        "tail_evidence_item_indices": tail_evidence_indices,
+        "head_reason_tags": head_reason_tags,
+        "tail_reason_tags": tail_reason_tags,
+        "head_insufficient_evidence": head_insufficient,
+        "tail_insufficient_evidence": tail_insufficient,
+        "head_support_ratio": round(head_support_ratio, 4),
+        "tail_support_ratio": round(tail_support_ratio, 4),
+        "head_reason": _normalize_text((head_resp_safe or {}).get("reason", ""))[:120],
+        "tail_reason": _normalize_text((tail_resp_safe or {}).get("reason", ""))[:120],
+        "head_llm_response": head_resp_safe,
+        "tail_llm_response": tail_resp_safe,
+        "head_llm_response_valid": bool(head_resp_safe),
+        "tail_llm_response_valid": bool(tail_resp_safe),
+        "head_llm_raw_text": head_raw_text,
+        "tail_llm_raw_text": tail_raw_text,
+        "reason": (
+            "llm_boundary_trim"
+            if trust_head and trust_tail
+            else ("llm_boundary_trim_head_only" if trust_head else "llm_boundary_trim_tail_only")
+        ),
+        "trimmed_segments": trimmed,
+    }
+
+
+def _remove_oral_fillers(text: str) -> str:
+    """轻量清洗口语填充词，避免影响专业术语。"""
+    t = _normalize_text(text)
+    if not t:
+        return t
+    # 独立口语词
+    t = re.sub(
+        r"(?:^|[，。！？；：,!?\s])(?:嗯|啊|呃|额|哦|噢|诶|欸|哎|唉)(?:[，。！？；：,!?\s]|$)",
+        " ",
+        t,
+    )
+    # 词尾黏连口语：如“讲啊，” -> “讲，”
+    t = re.sub(
+        r"([\u4e00-\u9fa5A-Za-z0-9])(?:嗯|啊|呃|额|哦|噢|诶|欸|哎|唉)(?=([，。！？；：,!?]|$))",
+        r"\1",
+        t,
+    )
+    # 词中口语：如“冷啊冷” -> “冷冷”
+    t = re.sub(
+        r"([\u4e00-\u9fa5A-Za-z0-9])(?:嗯|啊|呃|额|哦|噢|诶|欸|哎|唉)(?=[\u4e00-\u9fa5A-Za-z0-9])",
+        r"\1",
+        t,
+    )
+    # 口语尾缀
+    t = re.sub(r"(?:^|[，。！？；：,!?\s])(?:好吧|行吧)(?:[，。！？；：,!?\s]|$)", " ", t)
+    t = re.sub(
+        r"([\u4e00-\u9fa5A-Za-z0-9])(?:好吧|行吧)(?=([，。！？；：,!?]|$))",
+        r"\1",
+        t,
+    )
+    # 连续口语重复
+    t = re.sub(r"(?:嗯|啊|呃|额|哦|噢|诶|欸|哎|唉){2,}", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"([，。！？；：,!?])\1{1,}", r"\1", t)
     return t
 
 
@@ -367,9 +973,16 @@ async def _call_llm_json(
     response_schema: Optional[Dict[str, Any]] = None,
     max_tokens: int = 2048,
     temperature: float = 0.2,
+    use_schema: Optional[bool] = None,
+    timeout_sec: int = 120,
 ) -> Optional[Dict[str, Any]]:
     settings = get_settings()
     client = _get_llm_client()
+    use_schema_resolved = (
+        bool(use_schema)
+        if use_schema is not None
+        else _llm_json_schema_enabled_by_default()
+    )
     base_kwargs: Dict[str, Any] = {
         "model": settings.LLM_MODEL,
         "messages": [
@@ -378,8 +991,11 @@ async def _call_llm_json(
         ],
         "max_tokens": max_tokens,
         "temperature": temperature,
-        "timeout": 300,
+        "timeout": max(20, int(timeout_sec or 120)),
     }
+    extra_body = _llm_extra_body()
+    if extra_body:
+        base_kwargs["extra_body"] = extra_body
 
     async def _request_once(use_schema: bool) -> Optional[Dict[str, Any]]:
         kwargs = dict(base_kwargs)
@@ -398,9 +1014,9 @@ async def _call_llm_json(
         return json.loads(json_repair.repair_json(content))
 
     try:
-        return await _request_once(bool(response_schema))
+        return await _request_once(bool(response_schema) and use_schema_resolved)
     except Exception as e:
-        if response_schema:
+        if response_schema and use_schema_resolved:
             logger.warning(f"[quality] LLM JSON schema模式失败，降级重试: {e}")
             try:
                 return await _request_once(False)
@@ -409,6 +1025,706 @@ async def _call_llm_json(
                 return None
         logger.warning(f"[quality] LLM JSON调用失败: {e}")
         return None
+
+
+async def _call_llm_raw_text(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int = 512,
+    temperature: float = 0.0,
+    timeout_sec: int = 60,
+) -> Optional[str]:
+    settings = get_settings()
+    client = _get_llm_client()
+    kwargs: Dict[str, Any] = {
+        "model": settings.LLM_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "timeout": max(20, int(timeout_sec or 60)),
+    }
+    extra_body = _llm_extra_body()
+    if extra_body:
+        kwargs["extra_body"] = extra_body
+    try:
+        resp = await client.chat.completions.create(**kwargs)
+        content = (resp.choices[0].message.content or "").strip()
+        return content or None
+    except Exception as e:
+        logger.warning(f"[quality] LLM RAW调用失败: {e}")
+        return None
+
+
+def _normalize_role_label(role: Any) -> str:
+    r = _normalize_text(role).lower()
+    if r in {"teacher", "教师", "老师"}:
+        return "teacher"
+    if r in {"student", "学生"}:
+        return "student"
+    return "unknown"
+
+
+def _asr_role_verify_enabled(asr_segments: List[Dict[str, Any]]) -> bool:
+    return any(_normalize_role_label(seg.get("role")) in {"teacher", "student"} for seg in asr_segments)
+
+
+def _uniq_non_empty(items: List[str], max_items: int = 20) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for item in items:
+        text = _normalize_text(item)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _clip_text(text: str, max_len: int) -> str:
+    t = _normalize_text(text)
+    if max_len <= 0:
+        return t
+    return t[:max_len]
+
+
+def _chunk_asr_items(items: List[Dict[str, Any]], batch_size: int) -> List[List[Dict[str, Any]]]:
+    size = max(1, int(batch_size or 1))
+    return [items[i:i + size] for i in range(0, len(items), size)]
+
+
+def _build_asr_postprocess_segments(
+    asr_segments: List[Dict[str, Any]],
+    ocr_segments: List[Dict[str, Any]],
+    segment_count: int,
+) -> List[Dict[str, Any]]:
+    if not asr_segments:
+        return []
+
+    n = max(1, min(int(segment_count or 1), len(asr_segments)))
+    base = len(asr_segments) // n
+    rem = len(asr_segments) % n
+    boundaries: List[Tuple[int, int]] = []
+    start_idx = 0
+    for i in range(n):
+        size = base + (1 if i < rem else 0)
+        end_idx = start_idx + size
+        boundaries.append((start_idx, end_idx))
+        start_idx = end_idx
+
+    segments: List[Dict[str, Any]] = []
+    for i, (start_i, end_i) in enumerate(boundaries, start=1):
+        chunk = asr_segments[start_i:end_i]
+        if not chunk:
+            continue
+
+        start_sec = min((_safe_float(x.get("bg"), 0.0) for x in chunk), default=0.0)
+        end_sec = max((_safe_float(x.get("ed"), _safe_float(x.get("bg"), 0.0)) for x in chunk), default=start_sec)
+
+        asr_items: List[Dict[str, Any]] = []
+        for idx in range(start_i, end_i):
+            seg = asr_segments[idx]
+            asr_items.append(
+                {
+                    "item_id": f"a{idx}",
+                    "original_idx": idx,
+                    "source_raw_idx": _safe_int(seg.get("_raw_idx"), idx),
+                    "bg": _safe_float(seg.get("bg"), 0.0),
+                    "ed": _safe_float(seg.get("ed"), _safe_float(seg.get("bg"), 0.0)),
+                    "role": _normalize_role_label(seg.get("role")),
+                    "text": _normalize_text(seg.get("text", "")),
+                    "emotion": seg.get("emotion"),
+                    "speed": seg.get("speed"),
+                }
+            )
+
+        # OCR 根据该段时间范围对齐切分
+        ocr_hits: List[Dict[str, Any]] = []
+        for o in ocr_segments:
+            t = _safe_float(o.get("time_offset"), -1.0)
+            if t < 0:
+                continue
+            if i == len(boundaries):
+                in_range = start_sec <= t <= end_sec
+            else:
+                in_range = start_sec <= t < end_sec
+            if in_range:
+                ocr_hits.append(
+                    {
+                        "time_offset": _safe_int(o.get("time_offset"), 0),
+                        "page_num": _safe_int(o.get("page_num"), 0),
+                        "ocr_content": _normalize_text(o.get("ocr_content", "")),
+                        "ocr_keywords": [str(x) for x in (o.get("ocr_keywords") or []) if _normalize_text(str(x))],
+                    }
+                )
+
+        segments.append(
+            {
+                "segment_id": f"s{i}",
+                "segment_index": i,
+                "start_sec": round(start_sec, 3),
+                "end_sec": round(end_sec, 3),
+                "asr_items": asr_items,
+                "ocr_items": ocr_hits,
+            }
+        )
+    return segments
+
+
+def _fallback_segment_summary(segment: Dict[str, Any], max_len: int) -> Dict[str, Any]:
+    text = " ".join(_normalize_text(x.get("text", "")) for x in segment.get("asr_items", []))
+    text = _normalize_text(text)
+    if not text:
+        text = "本段语音内容较短，信息有限。"
+    summary = _clip_text(text, max_len)
+    if len(summary) < 8:
+        summary = "本段主要进行课堂讲授与概念说明。"
+    kws = _uniq_non_empty(re.findall(r"[\u4e00-\u9fa5A-Za-z0-9]{2,10}", text), max_items=6)
+    return {"summary": summary, "keywords": kws}
+
+
+async def _build_asr_segment_summaries(
+    *,
+    course_name: str,
+    segments: List[Dict[str, Any]],
+    concurrency: int,
+    max_summary_len: int,
+) -> Dict[str, Dict[str, Any]]:
+    if not segments:
+        return {}
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def _one(segment: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+        sid = segment["segment_id"]
+        asr_text = " ".join(_normalize_text(x.get("text", "")) for x in segment.get("asr_items", []))
+        if not asr_text:
+            return sid, _fallback_segment_summary(segment, max_summary_len)
+        user_prompt = ASR_SEGMENT_SUMMARY_USER_TEMPLATE.format(
+            course_name=course_name,
+            start_sec=_prompt_second_int(segment.get("start_sec", 0)),
+            end_sec=_prompt_second_int(segment.get("end_sec", 0)),
+            asr_text=asr_text[:2200],
+        )
+        async with semaphore:
+            resp = await _call_llm_json(
+                system_prompt=ASR_SEGMENT_SUMMARY_SYSTEM,
+                user_prompt=user_prompt,
+                response_schema=ASR_SEGMENT_SUMMARY_OUTPUT_SCHEMA,
+                max_tokens=500,
+                temperature=0.1,
+                use_schema=False,
+                timeout_sec=90,
+            )
+        fallback = _fallback_segment_summary(segment, max_summary_len)
+        if not isinstance(resp, dict):
+            return sid, fallback
+        summary = _clip_text(resp.get("summary", ""), max_summary_len)
+        if len(summary) < 8:
+            summary = fallback["summary"]
+        keywords = _uniq_non_empty([str(x) for x in (resp.get("keywords") or [])], max_items=8)
+        if not keywords:
+            keywords = fallback["keywords"]
+        return sid, {"summary": summary, "keywords": keywords}
+
+    pairs = await asyncio.gather(*[_one(seg) for seg in segments])
+    return {sid: data for sid, data in pairs}
+
+
+def _sanitize_homophone_pairs(pairs: List[Dict[str, Any]], max_items: int = 20) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for pair in pairs or []:
+        wrong = _normalize_text(pair.get("wrong", ""))
+        correct = _normalize_text(pair.get("correct", ""))
+        if not wrong or not correct or wrong == correct:
+            continue
+        key = f"{wrong}->{correct}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"wrong": wrong[:20], "correct": correct[:20]})
+        if len(out) >= max_items:
+            break
+    return out
+
+
+async def _build_ocr_terms_for_asr_segments(
+    *,
+    course_name: str,
+    segments: List[Dict[str, Any]],
+    concurrency: int,
+) -> Dict[str, Dict[str, Any]]:
+    if not segments:
+        return {}
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def _one(segment: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+        sid = segment["segment_id"]
+        ocr_items = segment.get("ocr_items", [])
+        ocr_text = " ".join(_normalize_text(x.get("ocr_content", "")) for x in ocr_items)
+        ocr_keywords = _uniq_non_empty(
+            [str(kw) for x in ocr_items for kw in (x.get("ocr_keywords") or [])],
+            max_items=40,
+        )
+        if not ocr_text and not ocr_keywords:
+            return sid, {"core_terms": [], "homophone_pairs": []}
+
+        user_prompt = OCR_TERMS_USER_TEMPLATE.format(
+            course_name=course_name,
+            start_sec=_prompt_second_int(segment.get("start_sec", 0)),
+            end_sec=_prompt_second_int(segment.get("end_sec", 0)),
+            ocr_text=ocr_text[:2500],
+            ocr_keywords_json=json.dumps(ocr_keywords, ensure_ascii=False),
+        )
+        async with semaphore:
+            resp = await _call_llm_json(
+                system_prompt=OCR_TERMS_SYSTEM,
+                user_prompt=user_prompt,
+                response_schema=OCR_TERMS_OUTPUT_SCHEMA,
+                max_tokens=900,
+                temperature=0.1,
+                use_schema=False,
+                timeout_sec=90,
+            )
+        if not isinstance(resp, dict):
+            return sid, {"core_terms": ocr_keywords[:10], "homophone_pairs": []}
+        core_terms = _uniq_non_empty([str(x) for x in (resp.get("core_terms") or [])], max_items=20)
+        pairs = _sanitize_homophone_pairs(resp.get("homophone_pairs") or [], max_items=20)
+        if not core_terms:
+            core_terms = ocr_keywords[:10]
+        return sid, {"core_terms": core_terms, "homophone_pairs": pairs}
+
+    pairs = await asyncio.gather(*[_one(seg) for seg in segments])
+    return {sid: data for sid, data in pairs}
+
+
+def _asr_text_change_is_reasonable(original: str, corrected: str) -> bool:
+    o = _normalize_text(original)
+    c = _normalize_text(corrected)
+    if not c:
+        return False
+    if not o:
+        return True
+    # 防止明显改写：长度变化过大时回退
+    ratio = len(c) / max(1, len(o))
+    return 0.45 <= ratio <= 2.2
+
+
+def _fallback_corrected_items(segment: Dict[str, Any], verify_role: bool) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for item in segment.get("asr_items", []):
+        out.append(
+            {
+                "item_id": item["item_id"],
+                "corrected_text": _normalize_text(item.get("text", "")),
+                "corrected_role": item.get("role") if verify_role else "unknown",
+                "confidence": 0.5,
+            }
+        )
+    return out
+
+
+async def _correct_asr_segment(
+    *,
+    course_name: str,
+    segment: Dict[str, Any],
+    previous_summaries: List[Dict[str, str]],
+    segment_summary: str,
+    core_terms: List[str],
+    homophone_pairs: List[Dict[str, str]],
+    verify_role: bool,
+    asr_items_override: Optional[List[Dict[str, Any]]] = None,
+    start_sec_override: Optional[float] = None,
+    end_sec_override: Optional[float] = None,
+) -> Dict[str, Any]:
+    source_items = asr_items_override if asr_items_override is not None else segment.get("asr_items", [])
+    asr_items = [
+        {
+            "item_id": x["item_id"],
+            "role": x.get("role", "unknown"),
+            "text": x.get("text", ""),
+        }
+        for x in source_items
+    ]
+    start_sec = segment.get("start_sec", 0) if start_sec_override is None else start_sec_override
+    end_sec = segment.get("end_sec", 0) if end_sec_override is None else end_sec_override
+    user_prompt = ASR_CORRECT_USER_TEMPLATE.format(
+        course_name=course_name,
+        start_sec=_prompt_second_int(start_sec),
+        end_sec=_prompt_second_int(end_sec),
+        previous_summaries_json=json.dumps(previous_summaries, ensure_ascii=False),
+        segment_summary=_normalize_text(segment_summary),
+        core_terms_json=json.dumps(core_terms, ensure_ascii=False),
+        homophone_pairs_json=json.dumps(homophone_pairs, ensure_ascii=False),
+        verify_role=str(bool(verify_role)).lower(),
+        asr_items_json=json.dumps(asr_items, ensure_ascii=False),
+    )
+    resp = await _call_llm_json(
+        system_prompt=ASR_CORRECT_SYSTEM,
+        user_prompt=user_prompt,
+        response_schema=ASR_CORRECT_OUTPUT_SCHEMA,
+        max_tokens=1400,
+        temperature=0.1,
+        use_schema=False,
+        timeout_sec=90,
+    )
+
+    fallback_summary = _clip_text(segment_summary, 80) or _fallback_segment_summary(segment, 80)["summary"]
+    fallback_items = _fallback_corrected_items(segment, verify_role)
+    if not isinstance(resp, dict) or not isinstance(resp.get("items"), list):
+        return {
+            "segment_id": segment["segment_id"],
+            "segment_summary": fallback_summary,
+            "items": [
+                x
+                for x in fallback_items
+                if x["item_id"] in {it["item_id"] for it in source_items}
+            ],
+        }
+
+    expected = {x["item_id"]: x for x in source_items}
+    parsed: Dict[str, Dict[str, Any]] = {}
+    for x in resp.get("items", []):
+        if not isinstance(x, dict):
+            continue
+        item_id = str(x.get("item_id", "")).strip()
+        if item_id not in expected:
+            continue
+        corrected_text = _normalize_text(x.get("corrected_text", ""))
+        corrected_text = _remove_oral_fillers(corrected_text) or corrected_text
+        if not _asr_text_change_is_reasonable(expected[item_id].get("text", ""), corrected_text):
+            corrected_text = _normalize_text(expected[item_id].get("text", ""))
+        corrected_role = _normalize_role_label(x.get("corrected_role", "unknown"))
+        parsed[item_id] = {
+            "item_id": item_id,
+            "corrected_text": corrected_text or _normalize_text(expected[item_id].get("text", "")),
+            "corrected_role": corrected_role,
+            "confidence": max(0.0, min(1.0, _safe_float(x.get("confidence"), 0.6))),
+        }
+
+    if len(parsed) != len(expected):
+        return {
+            "segment_id": segment["segment_id"],
+            "segment_summary": fallback_summary,
+            "items": [
+                x
+                for x in fallback_items
+                if x["item_id"] in expected
+            ],
+        }
+
+    ordered = [parsed[x["item_id"]] for x in source_items]
+    segment_summary_new = _clip_text(resp.get("segment_summary", ""), 80)
+    if len(segment_summary_new) < 8:
+        segment_summary_new = fallback_summary
+    if not verify_role:
+        for x in ordered:
+            x["corrected_role"] = "unknown"
+    return {
+        "segment_id": segment["segment_id"],
+        "segment_summary": segment_summary_new,
+        "items": ordered,
+    }
+
+
+def _validate_asr_alignment(
+    original_asr: List[Dict[str, Any]],
+    corrected_asr: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if len(original_asr) != len(corrected_asr):
+        return original_asr
+    aligned: List[Dict[str, Any]] = []
+    for i, orig in enumerate(original_asr):
+        cur = corrected_asr[i]
+        bg_o = _safe_float(orig.get("bg"), 0.0)
+        ed_o = _safe_float(orig.get("ed"), bg_o)
+        bg_c = _safe_float(cur.get("bg"), bg_o)
+        ed_c = _safe_float(cur.get("ed"), ed_o)
+        if abs(bg_o - bg_c) > 1e-6 or abs(ed_o - ed_c) > 1e-6:
+            return original_asr
+        text = _normalize_text(cur.get("text", ""))
+        if not text:
+            text = _normalize_text(orig.get("text", ""))
+        aligned.append(
+            {
+                "bg": bg_o,
+                "ed": ed_o,
+                "role": cur.get("role"),
+                "text": text,
+                "emotion": cur.get("emotion"),
+                "speed": cur.get("speed"),
+            }
+        )
+    return aligned
+
+
+async def _postprocess_asr_data_with_llm(
+    *,
+    course_name: str,
+    asr_segments: List[Dict[str, Any]],
+    ocr_segments: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    settings = get_settings()
+    enabled = bool(getattr(settings, "ASR_POST_ENABLED", True))
+    if not enabled or not asr_segments:
+        return asr_segments, {
+            "enabled": enabled,
+            "segment_count": 0,
+            "corrected_count": 0,
+            "role_verify_enabled": False,
+        }
+
+    segment_count = max(1, _safe_int(getattr(settings, "ASR_POST_SEGMENT_COUNT", 5), 5))
+    context_window = max(0, _safe_int(getattr(settings, "ASR_POST_CONTEXT_WINDOW", 2), 2))
+    concurrency = max(1, _safe_int(getattr(settings, "ASR_POST_CONCURRENCY", 4), 4))
+    segment_item_batch_size = max(1, _safe_int(getattr(settings, "ASR_POST_SEGMENT_ITEM_BATCH_SIZE", 40), 40))
+    skip_short_text_max_len = max(0, _safe_int(getattr(settings, "ASR_POST_SKIP_SHORT_TEXT_MAX_LEN", 2), 2))
+    max_summary_len = max(32, _safe_int(getattr(settings, "ASR_POST_MAX_SUMMARY_LEN", 80), 80))
+    asr_indexed = []
+    for i, seg in enumerate(asr_segments):
+        cur = dict(seg)
+        cur["_raw_idx"] = i
+        asr_indexed.append(cur)
+    boundary_meta = await _detect_lesson_boundaries_with_llm(
+        course_name=course_name,
+        asr_segments=asr_indexed,
+    )
+    asr_for_processing = list(asr_indexed)
+    trimmed_segments = boundary_meta.pop("trimmed_segments", None)
+    if boundary_meta.get("applied") and isinstance(trimmed_segments, list) and trimmed_segments:
+        asr_for_processing = trimmed_segments
+    merged_question_tail_count = 0
+    asr_preprocessed, merged_question_tail_count = _merge_question_tail_segments(asr_for_processing)
+    deleted_short_item_count = 0
+    asr_filtered: List[Dict[str, Any]] = []
+    for seg in asr_preprocessed:
+        if _should_delete_short_oral_asr_item(seg.get("text", ""), skip_short_text_max_len):
+            deleted_short_item_count += 1
+            continue
+        asr_filtered.append(seg)
+    if not asr_filtered:
+        return [], {
+            "enabled": enabled,
+            "segment_count": 0,
+            "segment_item_batch_size": segment_item_batch_size,
+            "skip_short_text_max_len": skip_short_text_max_len,
+            "boundary_trim": boundary_meta,
+            "merged_question_tail_count": merged_question_tail_count,
+            "deleted_short_item_count": deleted_short_item_count,
+            "corrected_count": 0,
+            "role_verify_enabled": False,
+            "segment_summaries": [],
+            "asr_correction_pairs": [],
+        }
+    verify_role = _asr_role_verify_enabled(asr_filtered)
+
+    segments = _build_asr_postprocess_segments(asr_filtered, ocr_segments, segment_count)
+    if not segments:
+        return asr_filtered, {
+            "enabled": enabled,
+            "segment_count": 0,
+            "corrected_count": 0,
+            "role_verify_enabled": verify_role,
+        }
+
+    # 1) 先并发提取每段概要（用于后续上下文）
+    summaries = await _build_asr_segment_summaries(
+        course_name=course_name,
+        segments=segments,
+        concurrency=concurrency,
+        max_summary_len=max_summary_len,
+    )
+    # 2) 并发提取OCR术语与同音纠错词表
+    ocr_terms_map = await _build_ocr_terms_for_asr_segments(
+        course_name=course_name,
+        segments=segments,
+        concurrency=concurrency,
+    )
+
+    # 3) 分段纠错并发执行（上下文依赖的是预先并发生成的 summaries，因此可并发）
+    corrected_by_idx: Dict[int, Dict[str, Any]] = {}
+    segment_summaries_final: List[Dict[str, Any]] = []
+    correction_semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def _correct_one(seg_idx: int, seg: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+        prev_start = max(0, seg_idx - context_window)
+        prev_summaries = []
+        for j in range(prev_start, seg_idx):
+            sid_prev = segments[j]["segment_id"]
+            prev_summaries.append(
+                {
+                    "segment_id": sid_prev,
+                    "summary": summaries.get(sid_prev, {}).get("summary", ""),
+                }
+            )
+        sid = seg["segment_id"]
+        current_summary = summaries.get(sid, {}).get("summary", "")
+        ocr_terms = ocr_terms_map.get(sid, {})
+        item_batches = _chunk_asr_items(seg.get("asr_items", []), segment_item_batch_size)
+
+        async def _correct_batch(batch_items: List[Dict[str, Any]]) -> Dict[str, Any]:
+            start_sec = min((_safe_float(x.get("bg"), 0.0) for x in batch_items), default=seg.get("start_sec", 0.0))
+            end_sec = max((_safe_float(x.get("ed"), _safe_float(x.get("bg"), 0.0)) for x in batch_items), default=seg.get("end_sec", 0.0))
+            async with correction_semaphore:
+                return await _correct_asr_segment(
+                    course_name=course_name,
+                    segment=seg,
+                    previous_summaries=prev_summaries,
+                    segment_summary=current_summary,
+                    core_terms=list(ocr_terms.get("core_terms", [])[:10]),
+                    homophone_pairs=list(ocr_terms.get("homophone_pairs", [])[:12]),
+                    verify_role=verify_role,
+                    asr_items_override=batch_items,
+                    start_sec_override=start_sec,
+                    end_sec_override=end_sec,
+                )
+
+        batch_results = await asyncio.gather(*[_correct_batch(batch) for batch in item_batches])
+        merged_items: List[Dict[str, Any]] = []
+        for res in batch_results:
+            merged_items.extend(res.get("items", []))
+        return seg_idx, {
+            "segment_id": sid,
+            "segment_summary": current_summary,
+            "items": merged_items,
+        }
+
+    corrected_pairs = await asyncio.gather(*[_correct_one(i, seg) for i, seg in enumerate(segments)])
+    corrected_pairs.sort(key=lambda x: x[0])
+
+    for seg_idx, corrected_seg in corrected_pairs:
+        seg = segments[seg_idx]
+        sid = seg["segment_id"]
+        current_summary = summaries.get(sid, {}).get("summary", "")
+        segment_summaries_final.append(
+            {
+                "segment_id": sid,
+                "summary": corrected_seg.get("segment_summary", current_summary),
+            }
+        )
+        parsed_items = corrected_seg.get("items", [])
+        item_map = {x["item_id"]: x for x in parsed_items}
+        for orig_item in seg.get("asr_items", []):
+            item_id = orig_item["item_id"]
+            corrected_item = item_map.get(item_id)
+            if not corrected_item:
+                corrected_item = {
+                    "corrected_text": orig_item.get("text", ""),
+                    "corrected_role": orig_item.get("role", "unknown"),
+                }
+            role_out = _normalize_role_label(corrected_item.get("corrected_role", orig_item.get("role", "unknown")))
+            role_orig = _normalize_role_label(orig_item.get("role", "unknown"))
+            if not verify_role:
+                role_out = orig_item.get("role")
+            elif role_out not in _ASR_ROLE_SET or role_out == "unknown":
+                role_out = role_orig
+            text_out = _remove_oral_fillers(
+                _normalize_text(corrected_item.get("corrected_text", orig_item.get("text", "")))
+            )
+            if not text_out:
+                text_out = _normalize_text(orig_item.get("text", ""))
+            corrected_by_idx[int(orig_item["original_idx"])] = {
+                "bg": _safe_float(orig_item.get("bg"), 0.0),
+                "ed": _safe_float(orig_item.get("ed"), _safe_float(orig_item.get("bg"), 0.0)),
+                "role": role_out,
+                "text": text_out,
+                "emotion": orig_item.get("emotion"),
+                "speed": orig_item.get("speed"),
+            }
+
+    merged: List[Dict[str, Any]] = []
+    for i, orig in enumerate(asr_filtered):
+        fixed = corrected_by_idx.get(i)
+        if not fixed:
+            fallback_text = _remove_oral_fillers(_normalize_text(orig.get("text", "")))
+            if not fallback_text:
+                fallback_text = _normalize_text(orig.get("text", ""))
+            fixed = {
+                "bg": _safe_float(orig.get("bg"), 0.0),
+                "ed": _safe_float(orig.get("ed"), _safe_float(orig.get("bg"), 0.0)),
+                "role": orig.get("role"),
+                "text": fallback_text,
+                "emotion": orig.get("emotion"),
+                "speed": orig.get("speed"),
+            }
+        if not fixed.get("text"):
+            fixed["text"] = _normalize_text(orig.get("text", ""))
+        merged.append(fixed)
+
+    aligned = _validate_asr_alignment(asr_filtered, merged)
+    corrected_count = sum(
+        1
+        for i in range(len(asr_filtered))
+        if _normalize_text(asr_filtered[i].get("text", "")) != _normalize_text(aligned[i].get("text", ""))
+    )
+    asr_correction_pairs: List[Dict[str, Any]] = []
+    for i in range(min(len(asr_filtered), len(aligned))):
+        raw_idx = _safe_int(asr_filtered[i].get("_raw_idx"), -1)
+        original_text = _normalize_text(asr_filtered[i].get("text", ""))
+        corrected_text = _normalize_text(aligned[i].get("text", ""))
+        original_role = _normalize_role_label(asr_filtered[i].get("role", "unknown"))
+        corrected_role = _normalize_role_label(aligned[i].get("role", "unknown"))
+        asr_correction_pairs.append(
+            {
+                "filtered_idx": i,
+                "raw_idx": raw_idx,
+                "bg": _safe_float(asr_filtered[i].get("bg"), 0.0),
+                "ed": _safe_float(asr_filtered[i].get("ed"), _safe_float(asr_filtered[i].get("bg"), 0.0)),
+                "original_role": original_role,
+                "corrected_role": corrected_role,
+                "original_text": original_text,
+                "corrected_text": corrected_text,
+                "text_changed": original_text != corrected_text,
+                "role_changed": original_role != corrected_role,
+            }
+        )
+    meta = {
+        "enabled": enabled,
+        "segment_count": len(segments),
+        "segment_item_batch_size": segment_item_batch_size,
+        "skip_short_text_max_len": skip_short_text_max_len,
+        "boundary_trim": boundary_meta,
+        "merged_question_tail_count": merged_question_tail_count,
+        "deleted_short_item_count": deleted_short_item_count,
+        "context_window": context_window,
+        "corrected_count": corrected_count,
+        "role_verify_enabled": verify_role,
+        "segment_summaries": segment_summaries_final,
+        "segment_ocr_core_terms": [],
+        "asr_correction_pairs": asr_correction_pairs,
+    }
+    seg_by_id = {str(seg.get("segment_id")): seg for seg in segments}
+    sorted_segment_ids = sorted(
+        [seg["segment_id"] for seg in segments],
+        key=lambda s: (0, int(s[1:])) if s[1:].isdigit() else (1, s),
+    )
+    for sid in sorted_segment_ids:
+        seg = seg_by_id.get(sid) or {}
+        asr_items = list(seg.get("asr_items", []))
+        original_indices = [
+            _safe_int(item.get("original_idx"), -1)
+            for item in asr_items
+            if _safe_int(item.get("original_idx"), -1) >= 0
+        ]
+        idx_start = min(original_indices) if original_indices else None
+        idx_end = max(original_indices) if original_indices else None
+        meta["segment_ocr_core_terms"].append(
+            {
+                "segment_id": sid,
+                "start_sec": _safe_float(seg.get("start_sec"), 0.0),
+                "end_sec": _safe_float(seg.get("end_sec"), 0.0),
+                "asr_item_count": len(asr_items),
+                "asr_original_idx_start": idx_start,
+                "asr_original_idx_end": idx_end,
+                "core_terms_json": list((ocr_terms_map.get(sid) or {}).get("core_terms", [])),
+            }
+        )
+    return aligned, meta
 
 
 def now_utc() -> datetime:
@@ -1966,6 +3282,8 @@ async def ingest_data(db: AsyncSession, request: QualityDataIngestionRequest) ->
         raise QualityServiceError(400, 40001, "asr_data 不能为空")
     if (_safe_float(request.teacher_weight, 0.0) + _safe_float(request.ocr_weight, 0.0)) <= 0:
         raise QualityServiceError(400, 40001, "teacher_weight + ocr_weight 必须大于0")
+    raw_asr_data = [seg.model_dump() for seg in request.asr_data]
+    raw_ocr_data = [seg.model_dump() for seg in request.ocr_data]
 
     course, course_created = await ensure_course(db, request)
 
@@ -2058,19 +3376,44 @@ async def ingest_data(db: AsyncSession, request: QualityDataIngestionRequest) ->
         lesson.updated_at = now_utc()
         await db.flush()
 
+    # ASR 后处理：分段概要并发 + OCR术语词表并发 + 顺序纠错 + 强校验
+    processed_asr_data = raw_asr_data
+    asr_postprocess_meta: Dict[str, Any] = {
+        "enabled": False,
+        "segment_count": 0,
+        "corrected_count": 0,
+        "role_verify_enabled": False,
+    }
+    try:
+        processed_asr_data, asr_postprocess_meta = await _postprocess_asr_data_with_llm(
+            course_name=request.course_name,
+            asr_segments=raw_asr_data,
+            ocr_segments=raw_ocr_data,
+        )
+    except Exception as e:
+        logger.warning(f"[quality] ASR后处理失败，回退原始ASR: err={e}")
+        processed_asr_data = raw_asr_data
+        asr_postprocess_meta = {
+            "enabled": False,
+            "segment_count": 0,
+            "corrected_count": 0,
+            "role_verify_enabled": _asr_role_verify_enabled(raw_asr_data),
+            "fallback_reason": "postprocess_exception",
+        }
+
     # ASR upsert
     asr_payload = await db.scalar(select(LessonAsrPayload).where(LessonAsrPayload.lesson_ref_id == lesson.id))
     if asr_payload is None:
         db.add(
             LessonAsrPayload(
                 lesson_ref_id=lesson.id,
-                asr_json=[seg.model_dump() for seg in request.asr_data],
+                asr_json=processed_asr_data,
                 created_at=now_utc(),
                 updated_at=now_utc(),
             )
         )
     else:
-        asr_payload.asr_json = [seg.model_dump() for seg in request.asr_data]
+        asr_payload.asr_json = processed_asr_data
         asr_payload.updated_at = now_utc()
 
     # OCR replace
@@ -2105,6 +3448,7 @@ async def ingest_data(db: AsyncSession, request: QualityDataIngestionRequest) ->
         "teacher_weight": request.teacher_weight,
         "ocr_weight": request.ocr_weight,
         "taxonomy_action": taxonomy_action,
+        "asr_postprocess": asr_postprocess_meta,
     }
 
 

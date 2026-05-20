@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = _toml.get("llm", {}).get("base_url", "")
     LLM_MAX_TOKENS: int = _toml.get("llm", {}).get("max_tokens", 8192)
     LLM_TEMPERATURE: float = _toml.get("llm", {}).get("temperature", 0.0)
+    LLM_DISABLE_THINKING: bool = _toml.get("llm", {}).get("disable_thinking", True)
 
     # 分块配置
     CHUNK_SIZE: int = _toml.get("chunking", {}).get("chunk_size", 10000)
@@ -89,6 +90,15 @@ class Settings(BaseSettings):
     MINERU_BASE_URL: str = _toml.get("mineru", {}).get("base_url", "http://10.80.5.25:8000")
     MINERU_PARSE_ENDPOINT: str = _toml.get("mineru", {}).get("parse_endpoint", "/file_parse")
     MINERU_TIMEOUT: int = _toml.get("mineru", {}).get("timeout", 120)
+
+    # ASR 后处理（质量画像 data-ingestion 阶段）
+    ASR_POST_ENABLED: bool = _toml.get("asr_postprocess", {}).get("enabled", True)
+    ASR_POST_SEGMENT_COUNT: int = _toml.get("asr_postprocess", {}).get("segment_count", 5)
+    ASR_POST_CONTEXT_WINDOW: int = _toml.get("asr_postprocess", {}).get("context_window", 2)
+    ASR_POST_CONCURRENCY: int = _toml.get("asr_postprocess", {}).get("llm_concurrency", 4)
+    ASR_POST_SEGMENT_ITEM_BATCH_SIZE: int = _toml.get("asr_postprocess", {}).get("segment_item_batch_size", 40)
+    ASR_POST_SKIP_SHORT_TEXT_MAX_LEN: int = _toml.get("asr_postprocess", {}).get("skip_short_text_max_len", 2)
+    ASR_POST_MAX_SUMMARY_LEN: int = _toml.get("asr_postprocess", {}).get("summary_max_chars", 80)
 
     class Config:
         env_file = ".env"
