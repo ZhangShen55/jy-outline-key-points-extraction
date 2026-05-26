@@ -7,6 +7,8 @@ import json
 import re
 import uuid
 from datetime import datetime
+from difflib import SequenceMatcher
+from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
 import json_repair
@@ -72,6 +74,15 @@ from app.prompts.bloom_v2 import (
 from app.schemas.quality import QualityDataIngestionRequest
 
 logger = get_logger(__name__)
+
+try:
+    from pypinyin import Style as _PinyinStyle
+    from pypinyin import lazy_pinyin as _lazy_pinyin
+    _HAS_PYPINYIN = True
+except Exception:
+    _PinyinStyle = None
+    _lazy_pinyin = None
+    _HAS_PYPINYIN = False
 
 
 class QualityServiceError(Exception):
@@ -196,6 +207,7 @@ def _prompt_second_int(value: Any) -> int:
     return _safe_int(round(_safe_float(value, 0.0)), 0)
 
 
+_CN_NUMERAL_SET = set("零一二三四五六七八九十百千万两〇")
 _SHORT_ORAL_FILLER_SET = {
     "嗯", "啊", "好", "呃", "额", "哦", "噢", "诶", "欸", "哎", "唉", "哈", "呀",
     "吧", "呢", "嘛", "呗", "嗯嗯", "啊啊", "呃呃", "哦哦", "哎呀",
@@ -204,6 +216,28 @@ _SHORT_ORAL_FILLER_SET = {
     "好好", "对对", "是啊", "对啊", "对哦", "嗯对", "嗯好", "不不", "我去", "看嗯", "特特",
 }
 _MERGE_QUESTION_TAIL_SET = {"对吧", "对吗", "是吗", "是吧"}
+
+
+@lru_cache(maxsize=50000)
+def _to_pinyin_full(text: str) -> str:
+    t = _normalize_text(text)
+    if not t or not _HAS_PYPINYIN or _lazy_pinyin is None:
+        return ""
+    try:
+        return "".join(_lazy_pinyin(t, errors="default"))
+    except Exception:
+        return ""
+
+
+@lru_cache(maxsize=50000)
+def _to_pinyin_initials(text: str) -> str:
+    t = _normalize_text(text)
+    if not t or not _HAS_PYPINYIN or _lazy_pinyin is None or _PinyinStyle is None:
+        return ""
+    try:
+        return "".join(_lazy_pinyin(t, style=_PinyinStyle.FIRST_LETTER, errors="default"))
+    except Exception:
+        return ""
 
 
 def _effective_text_len(text: str) -> int:
@@ -822,8 +856,8 @@ def _apply_homophone_pairs(
         correct = _normalize_text(pair.get("correct", ""))
         if not wrong or not correct or wrong == correct:
             continue
-        if terms_set and correct not in terms_set:
-            # 仅优先接受词表内候选，避免过拟合替换
+        # 优先词表内候选；允许少量词表外纠错词，避免漏掉关键修正
+        if terms_set and correct not in terms_set and len(correct) <= 1:
             continue
         safe_pairs.append((wrong, correct))
     safe_pairs.sort(key=lambda x: len(x[0]), reverse=True)
@@ -831,6 +865,131 @@ def _apply_homophone_pairs(
         if wrong in t:
             t = t.replace(wrong, correct)
     return t
+
+
+def _apply_core_terms_phonetic_match(
+    text: str,
+    *,
+    core_terms: Optional[List[str]] = None,
+    homophone_pairs: Optional[List[Dict[str, str]]] = None,
+) -> str:
+    """用 OCR 术语词表做轻量拼音兜底，修正未命中的近音词。"""
+    t = _normalize_text(text)
+    if not t or not _HAS_PYPINYIN:
+        return t
+
+    terms = _uniq_non_empty([str(x) for x in (core_terms or [])], max_items=300)
+    wrong_tokens = set()
+    for pair in homophone_pairs or []:
+        if not isinstance(pair, dict):
+            continue
+        c = _normalize_text(pair.get("correct", ""))
+        w = _normalize_text(pair.get("wrong", ""))
+        if c:
+            terms.append(c)
+        if w and len(w) <= 2:
+            wrong_tokens.add(w)
+    terms = _uniq_non_empty(terms, max_items=360)
+    candidate_terms = [
+        x
+        for x in terms
+        if 2 <= len(x) <= 6 and bool(re.fullmatch(r"[\u4e00-\u9fa5A-Za-z0-9]+", x))
+    ]
+    if not candidate_terms:
+        return t
+    term_set = set(candidate_terms)
+
+    replacements: List[Tuple[int, int, str, float]] = []
+    for m in re.finditer(r"[\u4e00-\u9fa5]{2,12}", t):
+        run = m.group(0)
+        run_start = m.start()
+        max_n = min(4, len(run))
+        for n in range(max_n, 1, -1):
+            for offset in range(0, len(run) - n + 1):
+                token = run[offset : offset + n]
+                if len(token) > 2:
+                    continue
+                if token in term_set or token in _SHORT_ORAL_FILLER_SET:
+                    continue
+                token_is_pure_numeral = bool(token) and all(ch in _CN_NUMERAL_SET for ch in token)
+                if not token_is_pure_numeral and token not in wrong_tokens:
+                    continue
+                token_full = _to_pinyin_full(token)
+                token_init = _to_pinyin_initials(token)
+                if not token_full or not token_init:
+                    continue
+
+                best_term = ""
+                best_score = 0.0
+                for cand in candidate_terms:
+                    if cand == token:
+                        continue
+                    if abs(len(cand) - len(token)) > 1:
+                        continue
+                    cand_full = _to_pinyin_full(cand)
+                    cand_init = _to_pinyin_initials(cand)
+                    if not cand_full or not cand_init:
+                        continue
+                    init_same = token_init == cand_init
+                    py_ratio = SequenceMatcher(None, token_full, cand_full).ratio()
+                    if not init_same and py_ratio < 0.88:
+                        continue
+                    char_ratio = SequenceMatcher(None, token, cand).ratio()
+                    token_has_numeral = any(ch in _CN_NUMERAL_SET for ch in token)
+                    cand_has_numeral = any(ch in _CN_NUMERAL_SET for ch in cand)
+                    score = 0.0
+                    if init_same:
+                        score += 0.50
+                    score += 0.32 * py_ratio
+                    score += 0.12 * char_ratio
+                    if token[-1] == cand[-1]:
+                        score += 0.08
+                    if len(token) == len(cand):
+                        score += 0.05
+                    if token_has_numeral and not cand_has_numeral:
+                        score += 0.12
+                    if score > best_score:
+                        best_score = score
+                        best_term = cand
+
+                if len(token) <= 2:
+                    threshold = 0.84
+                    if token_is_pure_numeral:
+                        threshold = 0.80
+                else:
+                    threshold = 0.82
+                if best_term and best_score >= threshold:
+                    start = run_start + offset
+                    end = start + n
+                    replacements.append((start, end, best_term, best_score))
+
+    if not replacements:
+        return t
+
+    # 贪心保留高分、长片段替换，避免重叠冲突
+    replacements.sort(key=lambda x: (x[3], x[1] - x[0]), reverse=True)
+    occupied = set()
+    selected: List[Tuple[int, int, str]] = []
+    for start, end, cand, _score in replacements:
+        if any(i in occupied for i in range(start, end)):
+            continue
+        selected.append((start, end, cand))
+        for i in range(start, end):
+            occupied.add(i)
+    if not selected:
+        return t
+
+    selected.sort(key=lambda x: x[0])
+    out: List[str] = []
+    pos = 0
+    for start, end, cand in selected:
+        if start < pos:
+            continue
+        out.append(t[pos:start])
+        out.append(cand)
+        pos = end
+    out.append(t[pos:])
+    return "".join(out)
 
 
 def _finalize_corrected_text(
@@ -843,6 +1002,11 @@ def _finalize_corrected_text(
     if not t:
         return t
     t = _apply_homophone_pairs(t, homophone_pairs=homophone_pairs, core_terms=core_terms)
+    t = _apply_core_terms_phonetic_match(
+        t,
+        core_terms=core_terms,
+        homophone_pairs=homophone_pairs,
+    )
     t = _remove_oral_fillers(t)
     t = _collapse_stutter_patterns(t)
     t = _collapse_adjacent_repetitions(t, max_unit_len=6)
@@ -1268,6 +1432,26 @@ def _build_asr_postprocess_segments(
     return segments
 
 
+def _filter_ocr_segments_by_time_range(
+    ocr_segments: List[Dict[str, Any]],
+    *,
+    start_sec: float,
+    end_sec: float,
+) -> List[Dict[str, Any]]:
+    if not ocr_segments:
+        return []
+    if end_sec < start_sec:
+        start_sec, end_sec = end_sec, start_sec
+    out: List[Dict[str, Any]] = []
+    for seg in ocr_segments:
+        t = _safe_float(seg.get("time_offset"), -1.0)
+        if t < 0:
+            continue
+        if start_sec <= t <= end_sec:
+            out.append(seg)
+    return out
+
+
 def _fallback_segment_summary(segment: Dict[str, Any], max_len: int) -> Dict[str, Any]:
     text = " ".join(_normalize_text(x.get("text", "")) for x in segment.get("asr_items", []))
     text = _normalize_text(text)
@@ -1330,7 +1514,14 @@ async def _build_asr_segment_summaries(
 def _sanitize_homophone_pairs(pairs: List[Dict[str, Any]], max_items: int = 20) -> List[Dict[str, str]]:
     out: List[Dict[str, str]] = []
     seen = set()
-    for pair in pairs or []:
+    stack: List[Any] = list(pairs or [])
+    while stack:
+        pair = stack.pop(0)
+        if isinstance(pair, list):
+            stack.extend(pair)
+            continue
+        if not isinstance(pair, dict):
+            continue
         wrong = _normalize_text(pair.get("wrong", ""))
         correct = _normalize_text(pair.get("correct", ""))
         if not wrong or not correct or wrong == correct:
@@ -1343,6 +1534,53 @@ def _sanitize_homophone_pairs(pairs: List[Dict[str, Any]], max_items: int = 20) 
         if len(out) >= max_items:
             break
     return out
+
+
+_OCR_TERM_STOPWORDS = {
+    "我们", "你们", "他们", "这个", "那个", "一种", "一个", "以及", "主要", "可以", "通过", "进行",
+    "就是", "因为", "所以", "然后", "其中", "如果", "例如", "比如", "这些", "那些", "内容", "课程",
+    "课堂", "老师", "学生", "讲解", "分析", "总结", "知识", "概念", "方法", "过程", "系统", "模型",
+}
+
+
+def _extract_rule_terms_from_ocr_items(ocr_items: List[Dict[str, Any]], max_items: int = 60) -> List[str]:
+    freq: Dict[str, int] = {}
+    sub_freq: Dict[str, int] = {}
+    for item in ocr_items:
+        content = _normalize_text(item.get("ocr_content", ""))
+        tokens = re.findall(r"[\u4e00-\u9fa5A-Za-z]{2,16}", content)
+        for kw in item.get("ocr_keywords") or []:
+            k = _normalize_text(kw)
+            if k:
+                tokens.append(k)
+        for token in tokens:
+            t = _normalize_text(token)
+            if not t:
+                continue
+            if len(t) < 2 or len(t) > 16:
+                continue
+            if t in _OCR_TERM_STOPWORDS:
+                continue
+            if re.fullmatch(r"[A-Za-z]{1,2}", t):
+                continue
+            if re.fullmatch(r"\d+", t):
+                continue
+            freq[t] = freq.get(t, 0) + 1
+            if re.fullmatch(r"[\u4e00-\u9fa5]{4,16}", t):
+                # 对长中文串做轻量切分，保留高频子词（例如从“石英黄铁矿”中恢复“石英”）
+                for n in (2, 3, 4):
+                    if len(t) < n:
+                        continue
+                    for i in range(0, len(t) - n + 1):
+                        sub = t[i : i + n]
+                        if sub in _OCR_TERM_STOPWORDS:
+                            continue
+                        sub_freq[sub] = sub_freq.get(sub, 0) + 1
+    for sub, c in sub_freq.items():
+        if c >= 2:
+            freq[sub] = max(freq.get(sub, 0), c)
+    ranked = sorted(freq.items(), key=lambda kv: (-kv[1], -len(kv[0]), kv[0]))
+    return [x[0] for x in ranked[:max_items]]
 
 
 async def _build_ocr_terms_for_asr_segments(
@@ -1363,7 +1601,8 @@ async def _build_ocr_terms_for_asr_segments(
             [str(kw) for x in ocr_items for kw in (x.get("ocr_keywords") or [])],
             max_items=40,
         )
-        if not ocr_text and not ocr_keywords:
+        rule_terms = _extract_rule_terms_from_ocr_items(ocr_items, max_items=80)
+        if not ocr_text and not ocr_keywords and not rule_terms:
             return sid, {"core_terms": [], "homophone_pairs": []}
 
         user_prompt = OCR_TERMS_USER_TEMPLATE.format(
@@ -1384,11 +1623,14 @@ async def _build_ocr_terms_for_asr_segments(
                 timeout_sec=90,
             )
         if not isinstance(resp, dict):
-            return sid, {"core_terms": ocr_keywords[:10], "homophone_pairs": []}
-        core_terms = _uniq_non_empty([str(x) for x in (resp.get("core_terms") or [])], max_items=20)
+            return sid, {"core_terms": _uniq_non_empty(rule_terms + ocr_keywords, max_items=30), "homophone_pairs": []}
+        core_terms = _uniq_non_empty(
+            [str(x) for x in (resp.get("core_terms") or [])] + rule_terms + ocr_keywords,
+            max_items=40,
+        )
         pairs = _sanitize_homophone_pairs(resp.get("homophone_pairs") or [], max_items=20)
         if not core_terms:
-            core_terms = ocr_keywords[:10]
+            core_terms = _uniq_non_empty(rule_terms + ocr_keywords, max_items=20)
         return sid, {"core_terms": core_terms, "homophone_pairs": pairs}
 
     pairs = await asyncio.gather(*[_one(seg) for seg in segments])
@@ -1594,9 +1836,17 @@ async def _postprocess_asr_data_with_llm(
         asr_segments=asr_indexed,
     )
     asr_for_processing = list(asr_indexed)
+    ocr_for_processing = list(ocr_segments or [])
     trimmed_segments = boundary_meta.pop("trimmed_segments", None)
     if boundary_meta.get("applied") and isinstance(trimmed_segments, list) and trimmed_segments:
         asr_for_processing = trimmed_segments
+        start_bg = _safe_float(boundary_meta.get("start_bg_sec"), 0.0)
+        end_ed = _safe_float(boundary_meta.get("end_ed_sec"), start_bg)
+        ocr_for_processing = _filter_ocr_segments_by_time_range(
+            ocr_for_processing,
+            start_sec=start_bg,
+            end_sec=end_ed,
+        )
     merged_question_tail_count = 0
     asr_preprocessed, merged_question_tail_count = _merge_question_tail_segments(asr_for_processing)
     deleted_short_item_count = 0
@@ -1622,7 +1872,7 @@ async def _postprocess_asr_data_with_llm(
         }
     verify_role = _asr_role_verify_enabled(asr_filtered)
 
-    segments = _build_asr_postprocess_segments(asr_filtered, ocr_segments, segment_count)
+    segments = _build_asr_postprocess_segments(asr_filtered, ocr_for_processing, segment_count)
     if not segments:
         return asr_filtered, {
             "enabled": enabled,
@@ -1631,18 +1881,35 @@ async def _postprocess_asr_data_with_llm(
             "role_verify_enabled": verify_role,
         }
 
-    # 1) 先并发提取每段概要（用于后续上下文）
-    summaries = await _build_asr_segment_summaries(
-        course_name=course_name,
-        segments=segments,
-        concurrency=concurrency,
-        max_summary_len=max_summary_len,
+    # 1) ASR概要 与 OCR术语词表并发生成
+    summaries, ocr_terms_map = await asyncio.gather(
+        _build_asr_segment_summaries(
+            course_name=course_name,
+            segments=segments,
+            concurrency=concurrency,
+            max_summary_len=max_summary_len,
+        ),
+        _build_ocr_terms_for_asr_segments(
+            course_name=course_name,
+            segments=segments,
+            concurrency=concurrency,
+        ),
     )
-    # 2) 并发提取OCR术语与同音纠错词表
-    ocr_terms_map = await _build_ocr_terms_for_asr_segments(
-        course_name=course_name,
-        segments=segments,
-        concurrency=concurrency,
+    global_core_terms = _uniq_non_empty(
+        [
+            str(term)
+            for x in ocr_terms_map.values()
+            for term in (x or {}).get("core_terms", [])
+        ],
+        max_items=320,
+    )
+    global_homophone_pairs = _sanitize_homophone_pairs(
+        [
+            pair
+            for x in ocr_terms_map.values()
+            for pair in ((x or {}).get("homophone_pairs") or [])
+        ],
+        max_items=320,
     )
 
     # 3) 分段纠错并发执行（上下文依赖的是预先并发生成的 summaries，因此可并发）
@@ -1664,6 +1931,10 @@ async def _postprocess_asr_data_with_llm(
         sid = seg["segment_id"]
         current_summary = summaries.get(sid, {}).get("summary", "")
         ocr_terms = ocr_terms_map.get(sid, {})
+        local_core_terms = list(ocr_terms.get("core_terms", []))
+        local_homophone_pairs = list(ocr_terms.get("homophone_pairs", []))
+        merged_core_terms = _uniq_non_empty(local_core_terms + global_core_terms, max_items=80)
+        merged_homophone_pairs = _sanitize_homophone_pairs(local_homophone_pairs + global_homophone_pairs, max_items=120)
         item_batches = _chunk_asr_items(seg.get("asr_items", []), segment_item_batch_size)
 
         async def _correct_batch(batch_items: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1675,8 +1946,8 @@ async def _postprocess_asr_data_with_llm(
                     segment=seg,
                     previous_summaries=prev_summaries,
                     segment_summary=current_summary,
-                    core_terms=list(ocr_terms.get("core_terms", [])[:10]),
-                    homophone_pairs=list(ocr_terms.get("homophone_pairs", [])[:12]),
+                    core_terms=merged_core_terms,
+                    homophone_pairs=merged_homophone_pairs,
                     verify_role=verify_role,
                     asr_items_override=batch_items,
                     start_sec_override=start_sec,
@@ -1701,6 +1972,10 @@ async def _postprocess_asr_data_with_llm(
         sid = seg["segment_id"]
         current_summary = summaries.get(sid, {}).get("summary", "")
         ocr_terms = ocr_terms_map.get(sid, {})
+        local_core_terms = list(ocr_terms.get("core_terms", []))
+        local_homophone_pairs = list(ocr_terms.get("homophone_pairs", []))
+        merged_core_terms = _uniq_non_empty(local_core_terms + global_core_terms, max_items=120)
+        merged_homophone_pairs = _sanitize_homophone_pairs(local_homophone_pairs + global_homophone_pairs, max_items=160)
         segment_summaries_final.append(
             {
                 "segment_id": sid,
@@ -1726,12 +2001,16 @@ async def _postprocess_asr_data_with_llm(
             text_out = _remove_oral_fillers(
                 _finalize_corrected_text(
                     _normalize_text(corrected_item.get("corrected_text", orig_item.get("text", ""))),
-                    core_terms=list(ocr_terms.get("core_terms", [])[:20]),
-                    homophone_pairs=list(ocr_terms.get("homophone_pairs", [])[:30]),
+                    core_terms=merged_core_terms,
+                    homophone_pairs=merged_homophone_pairs,
                 )
             )
             if not text_out:
-                text_out = _finalize_corrected_text(_normalize_text(orig_item.get("text", "")))
+                text_out = _finalize_corrected_text(
+                    _normalize_text(orig_item.get("text", "")),
+                    core_terms=merged_core_terms,
+                    homophone_pairs=merged_homophone_pairs,
+                )
             corrected_by_idx[int(orig_item["original_idx"])] = {
                 "bg": _safe_float(orig_item.get("bg"), 0.0),
                 "ed": _safe_float(orig_item.get("ed"), _safe_float(orig_item.get("bg"), 0.0)),
@@ -1745,7 +2024,11 @@ async def _postprocess_asr_data_with_llm(
     for i, orig in enumerate(asr_filtered):
         fixed = corrected_by_idx.get(i)
         if not fixed:
-            fallback_text = _finalize_corrected_text(_normalize_text(orig.get("text", "")))
+            fallback_text = _finalize_corrected_text(
+                _normalize_text(orig.get("text", "")),
+                core_terms=global_core_terms,
+                homophone_pairs=global_homophone_pairs,
+            )
             if not fallback_text:
                 fallback_text = _normalize_text(orig.get("text", ""))
             fixed = {
@@ -1792,6 +2075,7 @@ async def _postprocess_asr_data_with_llm(
         "segment_count": len(segments),
         "segment_item_batch_size": segment_item_batch_size,
         "skip_short_text_max_len": skip_short_text_max_len,
+        "ocr_trimmed_count": max(0, len(ocr_segments or []) - len(ocr_for_processing)),
         "boundary_trim": boundary_meta,
         "merged_question_tail_count": merged_question_tail_count,
         "deleted_short_item_count": deleted_short_item_count,
